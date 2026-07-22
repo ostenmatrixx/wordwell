@@ -716,7 +716,7 @@ function App() {
 
       <footer><p>Made for kitchen tables, rainy afternoons, and extremely serious rematches.</p><span>Wordwell v0.3</span></footer>
 
-      {captureKind && <CameraCapture title={captureKind === 'board' ? 'Scan the letter board' : 'Scan your answer sheet'} instruction={captureKind === 'board' ? 'Crop tightly around the full square grid.' : 'Crop to the handwritten answers you want included.'} aspect={captureKind === 'board' ? 1 : undefined} onCancel={() => setCaptureKind(null)} onConfirm={handleCapturedImage} />}
+      {captureKind && <CameraCapture title={captureKind === 'board' ? 'Scan the letter board' : 'Scan your answer sheet'} instruction={captureKind === 'board' ? `Use the ${gridSize}×${gridSize} guide to align the full square board.` : 'Crop to the handwritten answers you want included.'} aspect={captureKind === 'board' ? 1 : undefined} gridSize={captureKind === 'board' ? gridSize : undefined} onCancel={() => setCaptureKind(null)} onConfirm={handleCapturedImage} />}
       {ocrBusy && <div className="ocr-status" role="status"><LoaderCircle className="spin" /><span><strong>Reading locally</strong><small>{ocrProgress}</small></span></div>}
       {busy && <div className="busy-bar" aria-hidden="true" />}
       {toast && <div className="toast" role="status"><CheckCircle2 size={18} /> {toast}<button type="button" onClick={() => setToast(null)} aria-label="Dismiss notification"><X size={16} /></button></div>}

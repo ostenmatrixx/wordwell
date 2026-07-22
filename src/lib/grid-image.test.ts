@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { calculateGridCellRectangles } from './grid-image'
+import { calculateCenteredSquareCrop, calculateGridCellRectangles } from './grid-image'
+
+describe('camera board framing', () => {
+  it('centers a square inside landscape and portrait camera frames', () => {
+    expect(calculateCenteredSquareCrop(1920, 1080)).toEqual({ x: 420, y: 0, width: 1080, height: 1080 })
+    expect(calculateCenteredSquareCrop(1080, 1920)).toEqual({ x: 0, y: 420, width: 1080, height: 1080 })
+  })
+
+  it('rejects a camera frame without usable dimensions', () => {
+    expect(() => calculateCenteredSquareCrop(0, 1080)).toThrow('positive')
+  })
+})
 
 describe('board image grid splitting', () => {
   it('creates row-major rectangles for a 4 by 4 board', () => {

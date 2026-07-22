@@ -45,6 +45,17 @@ export type GridCellOcrPreprocessOptions = {
 
 export const GRID_CELL_OCR_ROTATIONS: readonly GridCellRotation[] = [0, 90, 180, 270]
 
+export function calculateCenteredSquareCrop(width: number, height: number): CropRectangle {
+  if (width <= 0 || height <= 0) throw new Error('Image dimensions must be positive')
+  const size = Math.min(width, height)
+  return {
+    x: (width - size) / 2,
+    y: (height - size) / 2,
+    width: size,
+    height: size,
+  }
+}
+
 function requireDocument() {
   if (typeof document === 'undefined') {
     throw new Error('Image processing requires a browser canvas')
