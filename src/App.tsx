@@ -1,0 +1,833 @@
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Camera,
+  Check,
+  CheckCircle2,
+  Clipboard,
+  Clock3,
+  Cloud,
+  CloudOff,
+  Copy,
+  Crown,
+  Download,
+  Eye,
+  Flag,
+  Gamepad2,
+  History,
+  Link2,
+  LoaderCircle,
+  LockKeyhole,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  ScanText,
+  Send,
+  Sparkles,
+  Trophy,
+  UserMinus,
+  Users,
+  Wifi,
+  WifiOff,
+  X,
+  XCircle,
+} from 'lucide-react'
+import { AnswerReview } from './components/AnswerReview'
+import { BoardEditor } from './components/BoardEditor'
+import { CameraCapture } from './components/CameraCapture'
+import {
+  answerTextToDraftRows,
+  captureDraftKey,
+  capturePhotoKey,
+  createAnswerDraftRow,
+  createAnswerDraftRows,
+  createCaptureStore,
+  createTesseractOcrAdapter,
+  recognizeGridCells,
+  updateAnswerDraftRow,
+  type AnswerDraftRow,
+} from './lib/capture'
+import { splitBoardImageIntoCells } from './lib/grid'
+import { evaluateGridRound } from './lib/round-engine'
+import {
+  applyWordOverride,
+  closeRoomRound,
+  confirmRoundBoard,
+  confirmRoundSubmission,
+  createNextRound,
+  createRoom,
+  ensureRoomAuth,
+  fetchRoomState,
+  finalizeRoomRound,
+  finishRoomGame,
+  getFrozenRoundSnapshot,
+  isRoomsSupabaseConfigured,
+  joinRoom,
+  openRoundSubmissions,
+  pauseRoomRound,
+  publishRoundResults,
+  removeRoomMember,
+  resumeRoomRound,
+  startRoomRound,
+  startScrabbleRoom,
+  submitScrabbleScore,
+  subscribeToRoom,
+  subscribeToRound,
+  voidScrabbleScore,
+  type GameRound,
+  type RoomJoin,
+  type RoomMember,
+  type RoomMode,
+  type RoomPresence,
+  type RoomState,
+  type RoundWordResult,
+} from './lib/rooms'
+import { scoreWord } from './lib/scoring'
+import { loadHistory } from './lib/storage'
+
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
+
+type LandingView = 'home' | 'create' | 'join'
+type CaptureKind = 'board' | 'answers' | null
+type StoredRoom = RoomJoin & { roomCode?: string }
+
+const ACTIVE_ROOM_KEY = 'wordwell:multiplayer-room:v1'
+const SCRABBLE_QUEUE_KEY = 'wordwell:scrabble-queue:v1'
+const PLAYER_COLORS = ['coral', 'mint', 'lemon', 'lilac', 'blue', 'peach']
+const captureStore = createCaptureStore()
+
+const MODES: Array<{ id: RoomMode; label: string; short: string; color: string }> = [
+  { id: 'scrabble', label: 'Scrabble', short: 'Dictionary checker · manual board score', color: 'lemon' },
+  { id: 'boggle', label: 'Boggle', short: '3+ letters · duplicates cancel', color: 'mint' },
+  { id: 'scribbage', label: 'Scribbage / Word Factory', short: '4+ letters · grid verified', color: 'lilac' },
+]
+
+function modeLabel(mode: RoomMode) {
+  return MODES.find((item) => item.id === mode)?.label ?? mode
+}
+
+function readStoredRoom(): StoredRoom | null {
+  try {
+    const value = localStorage.getItem(ACTIVE_ROOM_KEY)
+    return value ? JSON.parse(value) as StoredRoom : null
+  } catch {
+    return null
+  }
+}
+
+function saveStoredRoom(room: StoredRoom | null) {
+  if (room) localStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify(room))
+  else localStorage.removeItem(ACTIVE_ROOM_KEY)
+}
+
+type QueuedScrabbleEntry = { sessionId: string; entryId: string; word: string; points: number }
+
+function readScrabbleQueue(): QueuedScrabbleEntry[] {
+  try { return JSON.parse(localStorage.getItem(SCRABBLE_QUEUE_KEY) ?? '[]') as QueuedScrabbleEntry[] } catch { return [] }
+}
+
+function saveScrabbleQueue(entries: QueuedScrabbleEntry[]) {
+  localStorage.setItem(SCRABBLE_QUEUE_KEY, JSON.stringify(entries))
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message)
+  return 'Something went wrong. Please try again.'
+}
+
+function formatTimer(seconds: number) {
+  const safe = Math.max(0, seconds)
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
+}
+
+function roundSeconds(round: GameRound, now: number) {
+  if (round.phase !== 'playing' || !round.timerStartedAt || round.timerPausedAt) return round.timerRemainingSeconds
+  const elapsed = Math.floor((now - Date.parse(round.timerStartedAt)) / 1000)
+  return Math.max(0, round.timerRemainingSeconds - elapsed)
+}
+
+function resultReason(result: RoundWordResult) {
+  if (result.crossPlayerDuplicate) return 'Matched another player'
+  if (result.selfDuplicate) return 'Repeated on this list'
+  if (!result.formatValid) return 'Letters only'
+  if (!result.minimumLengthValid) return 'Too short'
+  if (!result.dictionaryValid) return 'Not in SOWPODS'
+  if (!result.gridValid) return 'No path on the board'
+  return 'Valid word'
+}
+
+function App() {
+  const [dictionary, setDictionary] = useState<ReadonlySet<string> | null>(null)
+  const [landingView, setLandingView] = useState<LandingView>('home')
+  const [activeRoom, setActiveRoom] = useState<StoredRoom | null>(() => readStoredRoom())
+  const [roomState, setRoomState] = useState<RoomState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
+  const [realtimeState, setRealtimeState] = useState('CLOSED')
+  const [presence, setPresence] = useState<RoomPresence[]>([])
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
+  const [now, setNow] = useState(Date.now())
+
+  const [createMode, setCreateMode] = useState<RoomMode>('boggle')
+  const [playerLimit, setPlayerLimit] = useState(4)
+  const [hostPlaying, setHostPlaying] = useState(true)
+  const [hostName, setHostName] = useState('Host')
+  const [gridSize, setGridSize] = useState<4 | 5>(4)
+  const [timerSeconds, setTimerSeconds] = useState(180)
+  const [joinCode, setJoinCode] = useState('')
+  const [joinName, setJoinName] = useState('')
+
+  const [boardCells, setBoardCells] = useState<string[]>(Array(16).fill(''))
+  const [captureKind, setCaptureKind] = useState<CaptureKind>(null)
+  const [ocrBusy, setOcrBusy] = useState(false)
+  const [ocrProgress, setOcrProgress] = useState('')
+  const [answerRows, setAnswerRows] = useState<AnswerDraftRow[]>([])
+  const [submissionMode, setSubmissionMode] = useState<'draft' | 'queued' | 'submitted' | 'rejected'>('draft')
+  const [queuedSubmission, setQueuedSubmission] = useState<{ clientToken: string; revision: number } | null>(null)
+  const [scrabbleWord, setScrabbleWord] = useState('')
+  const [scrabblePoints, setScrabblePoints] = useState('')
+  const [checkedScrabble, setCheckedScrabble] = useState<boolean | null>(null)
+
+  const currentRound = roomState?.rounds.at(-1) ?? null
+  const me = roomState?.members.find((member) => member.id === activeRoom?.memberId) ?? null
+  const isHost = Boolean(me?.isHost ?? activeRoom?.isHost)
+  const players = roomState?.members.filter((member) => member.isPlayer && !member.removedAt) ?? []
+  const legacyHistory = useMemo(() => loadHistory().filter((session) => session.status === 'complete'), [])
+
+  const refreshRoom = useCallback(async (quiet = false) => {
+    if (!activeRoom?.sessionId || !isRoomsSupabaseConfigured || !navigator.onLine) return
+    if (!quiet) setBusy(true)
+    try {
+      const state = await fetchRoomState(activeRoom.sessionId)
+      if (state) setRoomState(state)
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      if (!quiet) setBusy(false)
+    }
+  }, [activeRoom?.sessionId])
+
+  useEffect(() => {
+    let active = true
+    void import('./lib/dictionary').then((module) => { if (active) setDictionary(module.dictionary) })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 500)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const online = () => { setIsOnline(true); void refreshRoom(true) }
+    const offline = () => setIsOnline(false)
+    const install = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent) }
+    window.addEventListener('online', online)
+    window.addEventListener('offline', offline)
+    window.addEventListener('beforeinstallprompt', install)
+    return () => {
+      window.removeEventListener('online', online)
+      window.removeEventListener('offline', offline)
+      window.removeEventListener('beforeinstallprompt', install)
+    }
+  }, [refreshRoom])
+
+  useEffect(() => { if (activeRoom) void refreshRoom() }, [activeRoom, refreshRoom])
+
+  useEffect(() => {
+    if (!activeRoom?.sessionId || !isRoomsSupabaseConfigured) return
+    const onChange = () => void refreshRoom(true)
+    const leaveRoom = subscribeToRoom(activeRoom.sessionId, onChange, setRealtimeState, setPresence)
+    const leaveRound = currentRound ? subscribeToRound(currentRound.id, onChange) : () => undefined
+    return () => { leaveRoom(); leaveRound() }
+  }, [activeRoom?.sessionId, currentRound?.id, refreshRoom])
+
+  useEffect(() => {
+    if (!currentRound || !me) return
+    const key = captureDraftKey(currentRound.id, me.id)
+    void captureStore.loadDraft<{ rows: AnswerDraftRow[]; mode: typeof submissionMode; queued?: { clientToken: string; revision: number } | null }>(key).then((saved) => {
+      if (!saved || answerRows.length) return
+      setAnswerRows(saved.rows)
+      setSubmissionMode(saved.mode)
+      setQueuedSubmission(saved.queued ?? null)
+    })
+  }, [currentRound?.id, me?.id])
+
+  useEffect(() => {
+    if (!currentRound || !me) return
+    void captureStore.saveDraft(captureDraftKey(currentRound.id, me.id), { rows: answerRows, mode: submissionMode, queued: queuedSubmission })
+  }, [answerRows, submissionMode, queuedSubmission, currentRound?.id, me?.id])
+
+  useEffect(() => {
+    if (!toast) return
+    const timeout = window.setTimeout(() => setToast(null), 4200)
+    return () => window.clearTimeout(timeout)
+  }, [toast])
+
+  useEffect(() => {
+    if (currentRound?.phase !== 'collecting' || !me) return
+    const receipt = roomState?.submissions.find((submission) => submission.roundId === currentRound.id && submission.memberId === me.id)
+    if (receipt && submissionMode !== 'draft') setSubmissionMode('submitted')
+  }, [currentRound?.phase, roomState?.submissions, me?.id, submissionMode])
+
+  async function installApp() {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    await installPrompt.userChoice
+    setInstallPrompt(null)
+  }
+
+  async function handleCreateRoom() {
+    if (!isRoomsSupabaseConfigured) {
+      setToast('Add the Supabase publishable key to .env.local before creating a live room.')
+      return
+    }
+    if (hostPlaying && !hostName.trim()) { setToast('Enter your player name.'); return }
+    setBusy(true)
+    try {
+      await ensureRoomAuth()
+      const joined = await createRoom({
+        mode: createMode,
+        playerLimit,
+        hostPlayerName: hostPlaying ? hostName : null,
+        gridSize,
+        timerSeconds,
+      })
+      if (!joined) throw new Error('Live rooms are not configured.')
+      const stored = { ...joined, roomCode: joined.roomCode }
+      saveStoredRoom(stored)
+      setActiveRoom(stored)
+      setLandingView('home')
+      setToast(`Room ${joined.roomCode} is ready to share.`)
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleJoinRoom() {
+    if (!isRoomsSupabaseConfigured) { setToast('Live rooms need the Supabase publishable key.'); return }
+    if (joinCode.replace(/\W/g, '').length !== 6 || !joinName.trim()) { setToast('Enter a six-character code and your name.'); return }
+    setBusy(true)
+    try {
+      const joined = await joinRoom(joinCode, joinName)
+      if (!joined) throw new Error('Live rooms are not configured.')
+      const stored = { ...joined, roomCode: joinCode.toUpperCase() }
+      saveStoredRoom(stored)
+      setActiveRoom(stored)
+      setLandingView('home')
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyRoomLink() {
+    const code = activeRoom?.roomCode
+    if (!code) return
+    const text = `Join my Wordwell game with code ${code}`
+    if (navigator.share) await navigator.share({ title: 'Join Wordwell', text, url: window.location.origin })
+    else await navigator.clipboard.writeText(`${text} — ${window.location.origin}`)
+    setToast('Invite copied and ready to share.')
+  }
+
+  async function leaveRoom() {
+    saveStoredRoom(null)
+    setActiveRoom(null)
+    setRoomState(null)
+    setAnswerRows([])
+    setSubmissionMode('draft')
+    setQueuedSubmission(null)
+  }
+
+  function resizeBoard(nextSize: 4 | 5) {
+    setGridSize(nextSize)
+    setBoardCells((cells) => Array.from({ length: nextSize * nextSize }, (_, index) => cells[index] ?? ''))
+  }
+
+  async function handleCapturedImage(blob: Blob, previewUrl: string) {
+    setCaptureKind(null)
+    URL.revokeObjectURL(previewUrl)
+    if (!currentRound || !me) return
+    const kind = captureKind
+    if (!kind) return
+    const photoKey = capturePhotoKey(currentRound.id, me.id, kind)
+    await captureStore.savePhoto(photoKey, blob)
+    setOcrBusy(true)
+    setOcrProgress('Opening the offline reader…')
+    const adapter = createTesseractOcrAdapter({
+      workerPath: '/tesseract/worker.min.js',
+      corePath: '/tesseract/core',
+      langPath: '/tesseract/lang',
+      onProgress: ({ status, progress }) => setOcrProgress(`${status} · ${Math.round(progress * 100)}%`),
+    })
+    try {
+      if (kind === 'board') {
+        const cells = await splitBoardImageIntoCells(blob, gridSize)
+        const recognized = await recognizeGridCells(cells, adapter, (done, total) => setOcrProgress(`Reading tile ${done} of ${total}`))
+        setBoardCells(recognized.map((cell) => cell.suggestedValue))
+        setToast('Board scan complete. Correct every tile before starting.')
+      } else {
+        const result = await adapter.recognize(blob)
+        const rows = createAnswerDraftRows(result)
+        setAnswerRows(rows.length ? rows : [createAnswerDraftRow('', null, 'manual')])
+        setQueuedSubmission(null)
+        setSubmissionMode('draft')
+        setToast('Scan complete. Review every word before confirming.')
+      }
+    } catch (error) {
+      setToast(`${errorMessage(error)} You can still type the letters manually.`)
+    } finally {
+      await adapter.terminate()
+      await captureStore.deletePhoto(photoKey)
+      setOcrBusy(false)
+      setOcrProgress('')
+    }
+  }
+
+  async function confirmBoardAndStart() {
+    if (!currentRound || players.length < 2) { setToast('At least two players must join first.'); return }
+    const grid = Array.from({ length: gridSize }, (_, row) => boardCells.slice(row * gridSize, (row + 1) * gridSize))
+    setBusy(true)
+    try {
+      await confirmRoundBoard(currentRound.id, grid)
+      await startRoomRound(currentRound.id)
+      await refreshRoom(true)
+    } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
+  }
+
+  async function roomAction(action: () => Promise<unknown>) {
+    setBusy(true)
+    try { await action(); await refreshRoom(true) } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
+  }
+
+  async function submitAnswers() {
+    if (!currentRound || !me) return
+    const words = answerRows.filter((row) => row.rawText.trim()).map((row) => ({
+      id: row.id,
+      rawText: row.rawText,
+      normalized: row.normalized,
+      confidence: row.confidence,
+    }))
+    const existing = roomState?.submissions.find((submission) => submission.roundId === currentRound.id && submission.memberId === me.id)
+    const pending = queuedSubmission ?? { revision: (existing?.revision ?? 0) + 1, clientToken: crypto.randomUUID() }
+    if (!navigator.onLine) {
+      setQueuedSubmission(pending)
+      setSubmissionMode('queued')
+      setToast('Saved on this phone. Reconnect before the host closes the round.')
+      return
+    }
+    setBusy(true)
+    try {
+      await confirmRoundSubmission(currentRound.id, pending.clientToken, pending.revision, words)
+      setQueuedSubmission(null)
+      setSubmissionMode('submitted')
+      setToast(`${words.length} ${words.length === 1 ? 'word' : 'words'} submitted privately.`)
+      await refreshRoom(true)
+    } catch (error) {
+      const message = errorMessage(error)
+      const closed = /closed|not open/i.test(message)
+      setSubmissionMode(closed ? 'rejected' : navigator.onLine ? 'draft' : 'queued')
+      if (!closed) setQueuedSubmission(pending)
+      setToast(closed ? 'The host already closed the round. Your reviewed draft is still saved on this phone.' : message)
+    } finally { setBusy(false) }
+  }
+
+  async function closeAndReveal() {
+    if (!currentRound || !dictionary || !roomState) return
+    setBusy(true)
+    try {
+      const closed = await closeRoomRound(currentRound.id)
+      if (!closed) throw new Error('Could not close this round.')
+      const snapshot = await getFrozenRoundSnapshot(currentRound.id)
+      if (!snapshot) throw new Error('Could not prepare the frozen submissions.')
+      const evaluation = evaluateGridRound({
+        mode: roomState.session.mode === 'scribbage' ? 'scribbage' : 'boggle',
+        grid: currentRound.grid,
+        submissions: snapshot.submissions.map((submission) => ({
+          playerId: submission.memberId,
+          playerName: submission.playerName,
+          words: submission.words.map((word) => ({ id: word.id, word: word.rawText })),
+        })),
+      }, dictionary)
+      const results = evaluation.players.flatMap((player) => player.words.map((word) => ({
+        wordId: word.id,
+        formatValid: !word.failures.invalidCharacters,
+        minimumLengthValid: !word.failures.tooShort,
+        dictionaryValid: !word.failures.notInDictionary,
+        gridValid: !word.failures.notOnBoard,
+        selfDuplicate: word.failures.selfDuplicate,
+        crossPlayerDuplicate: word.failures.crossPlayerDuplicate,
+        gridPath: word.path,
+        baseScore: scoreWord(word.normalized, evaluation.mode),
+        score: word.score,
+        eligible: word.valid,
+      })))
+      await publishRoundResults(currentRound.id, closed.frozenRevision, results)
+      await refreshRoom(true)
+      setToast('Round revealed. Matching words have been crossed out for everyone.')
+    } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
+  }
+
+  async function overrideResult(result: RoundWordResult, check: 'dictionary' | 'grid_path') {
+    const reason = window.prompt(`Why should this ${check === 'dictionary' ? 'dictionary' : 'board path'} result be accepted?`)
+    if (!reason?.trim()) return
+    await roomAction(() => applyWordOverride(result.id, check, reason.trim()))
+  }
+
+  function checkScrabbleWord() {
+    const word = scrabbleWord.trim().toUpperCase()
+    if (!dictionary || !word) return
+    setScrabbleWord(word)
+    setCheckedScrabble(/^[A-Z]+$/.test(word) && dictionary.has(word))
+  }
+
+  async function awardScrabbleWord() {
+    const points = Number.parseInt(scrabblePoints, 10)
+    if (!checkedScrabble || !Number.isInteger(points) || points <= 0) { setToast('Check a valid word and enter its board score.'); return }
+    if (!roomState) { setToast('The room is not ready.'); return }
+    const queued = { sessionId: roomState.session.id, entryId: crypto.randomUUID(), word: scrabbleWord, points }
+    if (!navigator.onLine) {
+      saveScrabbleQueue([...readScrabbleQueue(), queued])
+      setScrabbleWord('')
+      setScrabblePoints('')
+      setCheckedScrabble(null)
+      setToast('Score saved on this phone and queued for reconnect.')
+      return
+    }
+    await roomAction(async () => {
+      await submitScrabbleScore(queued.sessionId, queued.entryId, queued.word, queued.points)
+      setScrabbleWord('')
+      setScrabblePoints('')
+      setCheckedScrabble(null)
+    })
+  }
+
+  useEffect(() => {
+    if (!isOnline || submissionMode !== 'queued' || !queuedSubmission || currentRound?.phase !== 'collecting') return
+    void submitAnswers()
+  }, [isOnline, submissionMode, queuedSubmission?.clientToken, currentRound?.phase])
+
+  useEffect(() => {
+    if (!isOnline || !roomState || roomState.session.mode !== 'scrabble') return
+    const pending = readScrabbleQueue().filter((entry) => entry.sessionId === roomState.session.id)
+    if (!pending.length) return
+    void (async () => {
+      const remaining = readScrabbleQueue().filter((entry) => entry.sessionId !== roomState.session.id)
+      for (let index = 0; index < pending.length; index += 1) {
+        try {
+          const entry = pending[index]
+          await submitScrabbleScore(entry.sessionId, entry.entryId, entry.word, entry.points)
+        } catch {
+          remaining.push(...pending.slice(index))
+          break
+        }
+      }
+      saveScrabbleQueue(remaining)
+      await refreshRoom(true)
+    })()
+  }, [isOnline, roomState?.session.id, roomState?.session.mode, refreshRoom])
+
+  const scoreboard = useMemo(() => {
+    if (!roomState) return []
+    return players.map((player, index) => {
+      const scrabble = roomState.scoreEntries.filter((entry) => entry.memberId === player.id && !entry.voidedAt).reduce((sum, entry) => sum + entry.points, 0)
+      const grid = roomState.results.filter((result) => {
+        const word = roomState.words.find((item) => item.id === result.wordId)
+        const submission = roomState.submissions.find((item) => item.id === word?.submissionId)
+        const round = roomState.rounds.find((item) => item.id === result.roundId)
+        return submission?.memberId === player.id && round?.phase === 'finalized'
+      }).reduce((sum, result) => sum + result.score, 0)
+      return { ...player, color: PLAYER_COLORS[index % PLAYER_COLORS.length], score: scrabble + grid }
+    }).sort((left, right) => right.score - left.score)
+  }, [roomState, players])
+
+  const timerRemaining = currentRound ? roundSeconds(currentRound, now) : 0
+
+  return (
+    <div className="app-shell room-app">
+      <header className="site-header">
+        <button className="brand brand-button" type="button" onClick={() => { if (!activeRoom) setLandingView('home') }} aria-label="Wordwell home">
+          <span className="brand-mark" aria-hidden="true"><span>W</span><small>4</small></span>
+          <span className="brand-name">Wordwell</span>
+        </button>
+        <div className="header-actions">
+          <span className={`connection-pill ${isOnline ? '' : 'is-offline'}`}>
+            {isOnline ? <Cloud size={15} /> : <WifiOff size={15} />}
+            {isOnline ? (realtimeState === 'SUBSCRIBED' && activeRoom ? 'Live' : 'Online') : 'Offline draft'}
+          </span>
+          {installPrompt && <button className="install-button" type="button" onClick={installApp}><Download size={16} /> Install</button>}
+        </div>
+      </header>
+
+      <main id="top">
+        {!activeRoom ? (
+          <Landing
+            view={landingView}
+            setView={setLandingView}
+            createMode={createMode}
+            setCreateMode={setCreateMode}
+            playerLimit={playerLimit}
+            setPlayerLimit={setPlayerLimit}
+            hostPlaying={hostPlaying}
+            setHostPlaying={setHostPlaying}
+            hostName={hostName}
+            setHostName={setHostName}
+            gridSize={gridSize}
+            setGridSize={setGridSize}
+            timerSeconds={timerSeconds}
+            setTimerSeconds={setTimerSeconds}
+            joinCode={joinCode}
+            setJoinCode={setJoinCode}
+            joinName={joinName}
+            setJoinName={setJoinName}
+            busy={busy}
+            onCreate={handleCreateRoom}
+            onJoin={handleJoinRoom}
+            configured={isRoomsSupabaseConfigured}
+            legacyCount={legacyHistory.length}
+          />
+        ) : !roomState ? (
+          <section className="loading-room"><LoaderCircle className="spin" /><h1>Opening your table…</h1><p>Your room and private player identity are being restored.</p><button className="secondary-button" type="button" onClick={leaveRoom}>Return home</button></section>
+        ) : (
+          <>
+            <RoomMasthead
+              room={roomState}
+              code={activeRoom.roomCode}
+              me={me}
+              onShare={copyRoomLink}
+              onLeave={leaveRoom}
+            />
+            <div className="room-layout">
+              <div className="round-column">
+                {!roomState.session.lobbyLocked && roomState.session.mode === 'scrabble' && (
+                  <LobbyPanel room={roomState} me={me} isHost={isHost} busy={busy} onRemove={(id) => roomAction(() => removeRoomMember(id))} onStart={() => roomAction(() => startScrabbleRoom(roomState.session.id))} />
+                )}
+
+                {roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && (
+                  <ScrabblePanel
+                    dictionaryReady={Boolean(dictionary)}
+                    word={scrabbleWord}
+                    points={scrabblePoints}
+                    checked={checkedScrabble}
+                    busy={busy}
+                    onWord={(value) => { setScrabbleWord(value.toUpperCase().replace(/[^A-Z]/g, '')); setCheckedScrabble(null) }}
+                    onPoints={setScrabblePoints}
+                    onCheck={checkScrabbleWord}
+                    onAward={awardScrabbleWord}
+                  />
+                )}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'board_setup' && (
+                  isHost ? (
+                    <>
+                      <LobbyPanel room={roomState} me={me} isHost busy={busy} onRemove={(id) => roomAction(() => removeRoomMember(id))} />
+                      <BoardEditor
+                        size={gridSize}
+                        cells={boardCells}
+                        scanning={ocrBusy}
+                        onSizeChange={resizeBoard}
+                        onCellChange={(index, value) => setBoardCells((cells) => cells.map((cell, cellIndex) => cellIndex === index ? value : cell))}
+                        onScan={() => setCaptureKind('board')}
+                        onConfirm={confirmBoardAndStart}
+                      />
+                    </>
+                  ) : <WaitingPanel icon={<Camera />} title="The host is setting up the board" copy="Keep this screen open. The confirmed grid and timer will appear here for everyone." />
+                )}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'playing' && (
+                  <LiveRoundPanel round={currentRound} seconds={timerRemaining} isHost={isHost} busy={busy} onPause={() => roomAction(() => pauseRoomRound(currentRound.id))} onResume={() => roomAction(() => resumeRoomRound(currentRound.id))} onCollect={() => roomAction(() => openRoundSubmissions(currentRound.id))} />
+                )}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'collecting' && (
+                  <>
+                    {me?.isPlayer && submissionMode !== 'submitted' ? (
+                      <AnswerReview
+                        words={answerRows.map((row) => ({ id: row.id, raw: row.rawText, normalized: row.normalized, confidence: row.confidence ?? undefined }))}
+                        processing={ocrBusy}
+                        submitting={busy}
+                        onScan={() => setCaptureKind('answers')}
+                        onChange={(id, value) => setAnswerRows((rows) => rows.map((row) => row.id === id ? updateAnswerDraftRow(row, value) : row))}
+                        onAdd={() => setAnswerRows((rows) => [...rows, createAnswerDraftRow('', null, 'manual')])}
+                        onRemove={(id) => setAnswerRows((rows) => rows.filter((row) => row.id !== id))}
+                        onConfirm={submitAnswers}
+                      />
+                    ) : me?.isPlayer ? (
+                      <WaitingPanel icon={<CheckCircle2 />} title={submissionMode === 'queued' ? 'Saved on this phone' : 'Your words are sealed'} copy={submissionMode === 'queued' ? 'Reconnect before the host closes so your list can be counted.' : 'Other players can only see that you are ready. Your words stay hidden until reveal.'} action={<button className="secondary-button" type="button" onClick={() => setSubmissionMode('draft')}><RotateCcw size={17} /> Edit submission</button>} />
+                    ) : null}
+                    {isHost && <ReadinessPanel room={roomState} round={currentRound} dictionaryReady={Boolean(dictionary)} busy={busy} onClose={closeAndReveal} />}
+                  </>
+                )}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'processing' && <WaitingPanel icon={<LoaderCircle className="spin" />} title="Preparing the reveal" copy="The round is locked while every list is checked against the dictionary and board." />}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'review' && (
+                  <RevealPanel room={roomState} round={currentRound} isHost={isHost} onOverride={overrideResult} onFinalize={() => roomAction(() => finalizeRoomRound(currentRound.id))} />
+                )}
+
+                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'finalized' && (
+                  <RoundCompletePanel room={roomState} round={currentRound} isHost={isHost} busy={busy} onNext={() => roomAction(() => createNextRound(roomState.session.id, currentRound.gridSize, currentRound.timerDurationSeconds))} onFinish={() => roomAction(() => finishRoomGame(roomState.session.id))} />
+                )}
+              </div>
+
+              <aside className="room-sidebar">
+                <Scoreboard scores={scoreboard} mode={roomState.session.mode} />
+                <Roster room={roomState} me={me} currentRound={currentRound} presence={presence} />
+                {roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && <ScrabbleHistory room={roomState} isHost={isHost} onVoid={(entryId) => { const reason = window.prompt('Why should this score be removed?'); if (reason?.trim()) void roomAction(() => voidScrabbleScore(entryId, reason.trim())) }} />}
+                {isHost && roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && <button className="finish-game-button" type="button" onClick={() => roomAction(() => finishRoomGame(roomState.session.id))}><Flag size={17} /> Finish game</button>}
+              </aside>
+            </div>
+          </>
+        )}
+      </main>
+
+      <footer><p>Made for kitchen tables, rainy afternoons, and extremely serious rematches.</p><span>Wordwell v0.3</span></footer>
+
+      {captureKind && <CameraCapture title={captureKind === 'board' ? 'Scan the letter board' : 'Scan your answer sheet'} instruction={captureKind === 'board' ? 'Crop tightly around the full square grid.' : 'Crop to the handwritten answers you want included.'} aspect={captureKind === 'board' ? 1 : undefined} onCancel={() => setCaptureKind(null)} onConfirm={handleCapturedImage} />}
+      {ocrBusy && <div className="ocr-status" role="status"><LoaderCircle className="spin" /><span><strong>Reading locally</strong><small>{ocrProgress}</small></span></div>}
+      {busy && <div className="busy-bar" aria-hidden="true" />}
+      {toast && <div className="toast" role="status"><CheckCircle2 size={18} /> {toast}<button type="button" onClick={() => setToast(null)} aria-label="Dismiss notification"><X size={16} /></button></div>}
+    </div>
+  )
+}
+
+type LandingProps = {
+  view: LandingView
+  setView: (view: LandingView) => void
+  createMode: RoomMode
+  setCreateMode: (mode: RoomMode) => void
+  playerLimit: number
+  setPlayerLimit: (count: number) => void
+  hostPlaying: boolean
+  setHostPlaying: (playing: boolean) => void
+  hostName: string
+  setHostName: (name: string) => void
+  gridSize: 4 | 5
+  setGridSize: (size: 4 | 5) => void
+  timerSeconds: number
+  setTimerSeconds: (seconds: number) => void
+  joinCode: string
+  setJoinCode: (code: string) => void
+  joinName: string
+  setJoinName: (name: string) => void
+  busy: boolean
+  onCreate: () => void
+  onJoin: () => void
+  configured: boolean
+  legacyCount: number
+}
+
+function Landing(props: LandingProps) {
+  if (props.view === 'home') return (
+    <>
+      <section className="room-hero">
+        <div>
+          <p className="eyebrow"><Sparkles size={16} /> Multiplayer word nights</p>
+          <h1>Every phone.<br /><em>One table.</em></h1>
+        </div>
+        <div className="hero-copy">
+          <p>Scan handwritten answers, verify every word, and reveal duplicates together—without passing one phone around.</p>
+          <div className="home-actions">
+            <button className="primary-button" type="button" onClick={() => props.setView('create')}><Plus size={19} /> Create a room</button>
+            <button className="secondary-button" type="button" onClick={() => props.setView('join')}><Link2 size={18} /> Join with code</button>
+          </div>
+          {!props.configured && <p className="config-note"><CloudOff size={16} /> Add your Supabase publishable key to enable live rooms.</p>}
+        </div>
+      </section>
+      <section className="feature-strip" aria-label="How Wordwell works">
+        <article className="coral"><span>01</span><Camera /><h2>Scan locally</h2><p>Photos stay on the phone that took them.</p></article>
+        <article className="mint"><span>02</span><LockKeyhole /><h2>Submit privately</h2><p>Only readiness is visible before reveal.</p></article>
+        <article className="lilac"><span>03</span><Eye /><h2>Reveal together</h2><p>Matching answers cross out for everyone.</p></article>
+      </section>
+      <section className="offline-ribbon"><WifiOff /><div><strong>Offline-capable after install</strong><span>Dictionary, OCR, board checks, and answer drafts remain on-device.</span></div>{props.legacyCount > 0 && <small><History size={14} /> {props.legacyCount} earlier {props.legacyCount === 1 ? 'game' : 'games'} still saved</small>}</section>
+    </>
+  )
+
+  if (props.view === 'join') return (
+    <section className="single-form-wrap">
+      <button className="back-button" type="button" onClick={() => props.setView('home')}><ArrowLeft size={17} /> Back</button>
+      <div className="join-card">
+        <p className="eyebrow"><Link2 size={16} /> Join instantly</p>
+        <h1>Find your <em>table.</em></h1>
+        <p>Ask the host for the six-character room code. Joining requires internet.</p>
+        <label><span>Room code</span><input className="room-code-input" value={props.joinCode} onChange={(event) => props.setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))} placeholder="W7RDLY" autoCapitalize="characters" /></label>
+        <label><span>Your player name</span><input value={props.joinName} onChange={(event) => props.setJoinName(event.target.value)} maxLength={30} placeholder="Mika" /></label>
+        <button className="primary-button full-button" type="button" onClick={props.onJoin} disabled={props.busy}><ArrowRight size={18} /> {props.busy ? 'Joining…' : 'Join room'}</button>
+      </div>
+    </section>
+  )
+
+  return (
+    <section className="single-form-wrap create-wrap">
+      <button className="back-button" type="button" onClick={() => props.setView('home')}><ArrowLeft size={17} /> Back</button>
+      <div className="create-card">
+        <div className="create-heading"><div><p className="eyebrow"><Gamepad2 size={16} /> Host a new game</p><h1>Set the <em>rules.</em></h1></div><p>Players join from their own phones after you create the room.</p></div>
+        <div className="setup-block"><span className="setup-number">01</span><div><h2>Choose the game</h2><div className="mode-picker setup-modes">{MODES.map((mode) => <button key={mode.id} className={`${mode.color} ${props.createMode === mode.id ? 'is-selected' : ''}`} type="button" onClick={() => props.setCreateMode(mode.id)}><span>{mode.label}</span><small>{mode.short}</small>{props.createMode === mode.id && <Check size={17} />}</button>)}</div></div></div>
+        <div className="setup-block"><span className="setup-number">02</span><div className="setup-grid"><label><span>Player limit</span><div className="player-counter"><button type="button" onClick={() => props.setPlayerLimit(Math.max(2, props.playerLimit - 1))}><Minus /></button><strong>{props.playerLimit}</strong><button type="button" onClick={() => props.setPlayerLimit(Math.min(6, props.playerLimit + 1))}><Plus /></button></div></label><label className="toggle-label"><span>Host is playing</span><input type="checkbox" checked={props.hostPlaying} onChange={(event) => props.setHostPlaying(event.target.checked)} /></label>{props.hostPlaying && <label><span>Your player name</span><input value={props.hostName} onChange={(event) => props.setHostName(event.target.value)} maxLength={30} /></label>}</div></div>
+        {props.createMode !== 'scrabble' && <div className="setup-block"><span className="setup-number">03</span><div className="setup-grid"><label><span>Board size</span><select value={props.gridSize} onChange={(event) => props.setGridSize(Number(event.target.value) as 4 | 5)}><option value="4">4 × 4</option><option value="5">5 × 5</option></select></label><label><span>Round timer</span><select value={props.timerSeconds} onChange={(event) => props.setTimerSeconds(Number(event.target.value))}><option value="0">No timer</option><option value="120">2 minutes</option><option value="180">3 minutes</option><option value="300">5 minutes</option></select></label></div></div>}
+        <div className="create-action"><p><Users size={16} /> Up to {props.playerLimit} players · {modeLabel(props.createMode)}</p><button className="primary-button" type="button" onClick={props.onCreate} disabled={props.busy}>{props.busy ? 'Creating…' : 'Create room'} <ArrowRight size={18} /></button></div>
+      </div>
+    </section>
+  )
+}
+
+function RoomMasthead({ room, code, me, onShare, onLeave }: { room: RoomState; code?: string; me: RoomMember | null; onShare: () => void; onLeave: () => void }) {
+  return <section className="room-masthead"><div><p className="eyebrow"><Wifi size={16} /> Live room · {me?.isHost ? 'You are host' : `Playing as ${me?.displayName ?? 'guest'}`}</p><h1>{modeLabel(room.session.mode)}<br /><em>face-off.</em></h1></div><div className="room-code-card"><span>Room code</span><strong>{code ?? '••••••'}</strong><div><button type="button" onClick={onShare}><Copy size={16} /> Share</button><button type="button" onClick={onLeave}><X size={16} /> Leave</button></div></div></section>
+}
+
+function LobbyPanel({ room, me, isHost, busy, onRemove, onStart }: { room: RoomState; me: RoomMember | null; isHost: boolean; busy: boolean; onRemove: (id: string) => void; onStart?: () => void }) {
+  const players = room.members.filter((member) => member.isPlayer)
+  return <section className="play-card lobby-card"><div className="card-heading"><div><p className="section-kicker">Live lobby</p><h2><Users size={22} /> {players.length} of {room.session.playerLimit} players joined</h2><p>{isHost ? 'Share the room code, then begin when everyone is here.' : 'You are in. Waiting for the host to begin.'}</p></div><span className="status-chip waiting">Open</span></div><ul className="lobby-list">{room.members.map((member, index) => <li key={member.id}><span className={`player-swatch ${PLAYER_COLORS[index % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0).toUpperCase()}</span><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? 'Host' : 'Player'} · Joined</small></span>{member.isHost ? <Crown size={18} /> : isHost && <button type="button" onClick={() => onRemove(member.id)} aria-label={`Remove ${member.displayName}`}><UserMinus size={17} /></button>}</li>)}</ul>{onStart && isHost && <button className="primary-button full-button" type="button" onClick={onStart} disabled={busy || players.length < 2}><Play size={18} /> Start Scrabble game</button>}</section>
+}
+
+function LiveRoundPanel({ round, seconds, isHost, busy, onPause, onResume, onCollect }: { round: GameRound; seconds: number; isHost: boolean; busy: boolean; onPause: () => void; onResume: () => void; onCollect: () => void }) {
+  return <section className="play-card live-round"><div className="live-round-top"><div><p className="section-kicker">Round {round.roundNumber} · Write on paper</p><h2>Find every word you can</h2></div><div className={`round-timer ${seconds <= 10 ? 'urgent' : ''}`} aria-label={`${seconds} seconds remaining`}><Clock3 /><strong>{round.timerDurationSeconds === 0 ? '∞' : formatTimer(seconds)}</strong><small>{round.timerPausedAt ? 'Paused' : 'Remaining'}</small></div></div><div className={`shared-board size-${round.gridSize}`}>{round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => <span key={`${rowIndex}-${columnIndex}`}>{cell}<small>{rowIndex * round.gridSize + columnIndex + 1}</small></span>))}</div><p className="round-instruction">Letters may connect horizontally, vertically, or diagonally. A tile cannot be reused in the same word.</p>{isHost && <div className="host-controls"><button className="secondary-button" type="button" disabled={busy} onClick={round.timerPausedAt ? onResume : onPause}>{round.timerPausedAt ? <Play size={17} /> : <Pause size={17} />}{round.timerPausedAt ? 'Resume' : 'Pause'}</button><button className="primary-button" type="button" disabled={busy} onClick={onCollect}><ScanText size={18} /> Collect answers now</button></div>}</section>
+}
+
+function ReadinessPanel({ room, round, dictionaryReady, busy, onClose }: { room: RoomState; round: GameRound; dictionaryReady: boolean; busy: boolean; onClose: () => void }) {
+  const players = room.members.filter((member) => member.isPlayer)
+  const ready = players.filter((player) => room.submissions.some((submission) => submission.roundId === round.id && submission.memberId === player.id && submission.status === 'confirmed'))
+  return <section className="play-card readiness-card"><div className="card-heading"><div><p className="section-kicker">Host controls</p><h2><LockKeyhole size={21} /> {ready.length} of {players.length} ready</h2><p>Lists stay private. Closing now counts anyone missing as an empty submission.</p></div><span className="status-chip ready">{ready.length}/{players.length}</span></div><div className="readiness-dots">{players.map((player) => { const done = ready.some((item) => item.id === player.id); return <span className={done ? 'done' : ''} key={player.id}>{done ? <Check /> : <Clock3 />}<small>{player.displayName}</small></span> })}</div><button className="primary-button full-button" type="button" onClick={onClose} disabled={busy || !dictionaryReady}><Eye size={18} /> {dictionaryReady ? 'Close round & reveal' : 'Opening dictionary…'}</button></section>
+}
+
+function WaitingPanel({ icon, title, copy, action }: { icon: ReactNode; title: string; copy: string; action?: ReactNode }) {
+  return <section className="play-card waiting-panel"><span>{icon}</span><p className="section-kicker">Round status</p><h2>{title}</h2><p>{copy}</p>{action}</section>
+}
+
+function RevealPanel({ room, round, isHost, onOverride, onFinalize }: { room: RoomState; round: GameRound; isHost: boolean; onOverride: (result: RoundWordResult, check: 'dictionary' | 'grid_path') => void; onFinalize: () => void }) {
+  return <section className="play-card reveal-card"><div className="card-heading"><div><p className="section-kicker">Round {round.roundNumber} reveal</p><h2><Eye size={22} /> The lists are open</h2><p>Exact matches are crossed out for every player and score zero.</p></div><span className="status-chip ready">Revealed</span></div><div className="reveal-columns">{room.members.filter((member) => member.isPlayer).map((member, index) => { const submission = room.submissions.find((item) => item.roundId === round.id && item.memberId === member.id); const words = room.words.filter((word) => word.submissionId === submission?.id); return <article key={member.id}><header><span className={`player-swatch ${PLAYER_COLORS[index % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0)}</span><div><h3>{member.displayName}</h3><small>{words.reduce((sum, word) => sum + (room.results.find((result) => result.wordId === word.id)?.score ?? 0), 0)} points</small></div></header>{words.length === 0 ? <p className="empty-list">No submitted words</p> : <ul>{words.map((word) => { const result = room.results.find((item) => item.wordId === word.id); if (!result) return null; const invalid = !result.eligible; return <li className={invalid ? 'crossed' : 'accepted'} key={word.id}><span><strong>{word.normalized}</strong><small>{resultReason(result)}</small></span><b>{result.score ? `+${result.score}` : '0'}</b>{isHost && !result.dictionaryValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'dictionary')}>Accept dictionary</button>}{isHost && !result.gridValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'grid_path')}>Accept path</button>}</li>})}</ul>}</article> })}</div>{isHost ? <button className="primary-button full-button" type="button" onClick={onFinalize}><Trophy size={18} /> Finalize round scores</button> : <p className="waiting-copy">Waiting for the host to finalize this round.</p>}</section>
+}
+
+function RoundCompletePanel({ room, round, isHost, busy, onNext, onFinish }: { room: RoomState; round: GameRound; isHost: boolean; busy: boolean; onNext: () => void; onFinish: () => void }) {
+  return <section className="play-card round-complete"><span className="trophy-orbit"><Trophy size={38} /></span><p className="section-kicker">Round {round.roundNumber} complete</p><h2>Scores are locked in.</h2><p>{isHost ? 'Set up another board or finish the game and crown the winner.' : 'The host will decide whether there is another round.'}</p>{isHost && <div><button className="primary-button" type="button" onClick={onNext} disabled={busy}><Plus size={18} /> Next round</button><button className="secondary-button" type="button" onClick={onFinish} disabled={busy}><Flag size={17} /> Finish game</button></div>}{room.session.status === 'complete' && <p>Game complete.</p>}</section>
+}
+
+function ScrabblePanel({ dictionaryReady, word, points, checked, busy, onWord, onPoints, onCheck, onAward }: { dictionaryReady: boolean; word: string; points: string; checked: boolean | null; busy: boolean; onWord: (value: string) => void; onPoints: (value: string) => void; onCheck: () => void; onAward: () => void }) {
+  return <section className="play-card scrabble-panel"><div className="card-heading"><div><p className="section-kicker">Your turn</p><h2><BookOpen size={22} /> Check the word, enter the board score</h2><p>Wordwell validates against offline SOWPODS. You include tiles, multipliers, and bonuses manually.</p></div></div><div className="scrabble-entry"><label><span>Word played</span><input value={word} onChange={(event) => onWord(event.target.value)} placeholder="QUIZZED" autoCapitalize="characters" /></label><button className="secondary-button" type="button" onClick={onCheck} disabled={!dictionaryReady || !word}>{dictionaryReady ? 'Check word' : 'Opening dictionary…'}</button></div>{checked !== null && <div className={`word-verdict ${checked ? 'valid' : 'invalid'}`}>{checked ? <CheckCircle2 /> : <XCircle />}<span><strong>{checked ? 'Valid SOWPODS word' : 'Not accepted'}</strong><small>{checked ? 'Enter the score shown on your board.' : 'Check the spelling or use your agreed house rule.'}</small></span></div>}{checked && <div className="manual-score"><label><span>Board score</span><input type="number" min="1" inputMode="numeric" value={points} onChange={(event) => onPoints(event.target.value)} placeholder="0" /></label><button className="primary-button" type="button" onClick={onAward} disabled={busy || Number(points) <= 0}><Send size={18} /> Add my score</button></div>}</section>
+}
+
+function Scoreboard({ scores, mode }: { scores: Array<RoomMember & { color: string; score: number }>; mode: RoomMode }) {
+  return <section className="scoreboard-card"><div className="scoreboard-heading"><div><p className="section-kicker">Live table</p><h2><Trophy size={21} /> Scoreboard</h2></div><span>{modeLabel(mode)}</span></div><ol className="player-scores">{scores.map((player, index) => <li key={player.id}><div className="score-row"><span className={`player-swatch ${player.color}`}>{index + 1}</span><span className="player-score-name"><strong>{player.displayName}</strong><small>{index === 0 ? 'Leading' : 'In the game'}</small></span><b>{player.score}<small>pts</small></b></div></li>)}</ol></section>
+}
+
+function Roster({ room, me, currentRound, presence }: { room: RoomState; me: RoomMember | null; currentRound: GameRound | null; presence: RoomPresence[] }) {
+  return <section className="roster-card"><div className="history-title-row"><div><p className="section-kicker">Around the table</p><h2><Users size={20} /> Players</h2></div></div><ul>{room.members.map((member) => { const ready = currentRound && room.submissions.some((submission) => submission.roundId === currentRound.id && submission.memberId === member.id && submission.status === 'confirmed'); const online = member.id === me?.id || presence.some((item) => item.userId === member.userId); return <li key={member.id}><span className={`presence-dot ${online ? '' : 'is-offline'}`} /><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? `Host · ${online ? 'Online' : 'Offline'}` : ready ? 'Ready' : online ? 'Connected' : 'Offline'}</small></span>{ready && <Check size={17} />}</li>})}</ul></section>
+}
+
+function ScrabbleHistory({ room, isHost, onVoid }: { room: RoomState; isHost: boolean; onVoid: (entryId: string) => void }) {
+  return <section className="plays-card"><div className="history-title-row"><div><p className="section-kicker">Score ledger</p><h2><History size={20} /> Recent plays</h2></div></div>{room.scoreEntries.filter((entry) => !entry.voidedAt).length === 0 ? <p className="empty-ledger">Checked words will appear here.</p> : <ol className="plays-list">{[...room.scoreEntries].filter((entry) => !entry.voidedAt).reverse().slice(0, 10).map((entry) => <li key={entry.id}><span><strong>{entry.word}</strong><small>{room.members.find((member) => member.id === entry.memberId)?.displayName}</small></span><b>+{entry.points}</b>{isHost && <button type="button" onClick={() => onVoid(entry.id)} aria-label={`Remove ${entry.word}`}><X size={15} /></button>}</li>)}</ol>}</section>
+}
+
+export default App
