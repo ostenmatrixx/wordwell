@@ -26,6 +26,25 @@ export type GridCellImage = GridCellRectangle & {
   blob: Blob
 }
 
+export type GridCellRotation = 0 | 90 | 180 | 270
+
+export type GridCellOcrVariant = {
+  blob: Blob
+  rotation: GridCellRotation
+}
+
+export type GridCellOcrPreprocessOptions = {
+  rotations?: readonly GridCellRotation[]
+  paddingRatio?: number
+  sourceInsetRatio?: number
+  minimumDimension?: number
+  maximumDimension?: number
+  brightness?: number
+  contrast?: number
+}
+
+export const GRID_CELL_OCR_ROTATIONS: readonly GridCellRotation[] = [0, 90, 180, 270]
+
 function requireDocument() {
   if (typeof document === 'undefined') {
     throw new Error('Image processing requires a browser canvas')
@@ -214,3 +233,64 @@ export async function splitBoardImageIntoCells(
   }
 }
 
+/**
+ * Produces padded, high-contrast copies of one tile at every quarter turn.
+ * Physical Word Factory/Boggle tiles can be independently rotated, so rotating
+ * the whole board photo is not enough. Decoding once keeps the four variants
+ * inexpensive compared with the OCR passes that consume them.
+ */
+export async function createGridCellOcrVariants(
+  cell: GridCellImage,
+  options: GridCellOcrPreprocessOptions = {},
+): Promise<GridCellOcrVariant[]> {
+  const decoded = await decodeImage(cell.blob)
+  try {
+    const rotations = options.rotations ?? GRID_CELL_OCR_ROTATIONS
+    const paddingRatio = clamp(options.paddingRatio ?? 0.16, 0.05, 0.3)
+    const sourceInsetRatio = clamp(options.sourceInsetRatio ?? 0.12, 0, 0.25)
+    const minimumDimension = Math.max(64, options.minimumDimension ?? 224)
+    const maximumDimension = Math.max(minimumDimension, options.maximumDimension ?? 512)
+    const sourceX = decoded.width * sourceInsetRatio
+    const sourceY = decoded.height * sourceInsetRatio
+    const sourceWidth = decoded.width - sourceX * 2
+    const sourceHeight = decoded.height - sourceY * 2
+    const sourceDimension = Math.max(sourceWidth, sourceHeight)
+    const contentDimension = clamp(sourceDimension * 2, minimumDimension, maximumDimension)
+    const canvasDimension = Math.ceil(contentDimension / (1 - paddingRatio * 2))
+    const scale = Math.min(contentDimension / sourceWidth, contentDimension / sourceHeight)
+    const brightness = clamp(options.brightness ?? 108, 20, 300)
+    const contrast = clamp(options.contrast ?? 175, 20, 300)
+
+    return await Promise.all(
+      rotations.map(async (rotation) => {
+        const canvas = createCanvas(canvasDimension, canvasDimension)
+        const context = getContext(canvas)
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.save()
+        context.translate(canvas.width / 2, canvas.height / 2)
+        context.rotate((rotation * Math.PI) / 180)
+        context.filter = `grayscale(100%) brightness(${brightness}%) contrast(${contrast}%)`
+        context.drawImage(
+          decoded.source,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight,
+          (-sourceWidth * scale) / 2,
+          (-sourceHeight * scale) / 2,
+          sourceWidth * scale,
+          sourceHeight * scale,
+        )
+        context.restore()
+
+        return {
+          rotation,
+          blob: await canvasToBlob(canvas, 'image/png', 1),
+        }
+      }),
+    )
+  } finally {
+    decoded.release()
+  }
+}

@@ -188,6 +188,7 @@ function App() {
   const [joinName, setJoinName] = useState('')
 
   const [boardCells, setBoardCells] = useState<string[]>(Array(16).fill(''))
+  const [boardReviewCells, setBoardReviewCells] = useState<boolean[]>(Array(16).fill(false))
   const [captureKind, setCaptureKind] = useState<CaptureKind>(null)
   const [ocrBusy, setOcrBusy] = useState(false)
   const [ocrProgress, setOcrProgress] = useState('')
@@ -350,11 +351,15 @@ function App() {
     setAnswerRows([])
     setSubmissionMode('draft')
     setQueuedSubmission(null)
+    setGridSize(4)
+    setBoardCells(Array(16).fill(''))
+    setBoardReviewCells(Array(16).fill(false))
   }
 
   function resizeBoard(nextSize: 4 | 5) {
     setGridSize(nextSize)
     setBoardCells((cells) => Array.from({ length: nextSize * nextSize }, (_, index) => cells[index] ?? ''))
+    setBoardReviewCells((cells) => Array.from({ length: nextSize * nextSize }, (_, index) => cells[index] ?? false))
   }
 
   async function handleCapturedImage(blob: Blob, previewUrl: string) {
@@ -371,6 +376,12 @@ function App() {
       workerPath: '/tesseract/worker.min.js',
       corePath: '/tesseract/core',
       langPath: '/tesseract/lang',
+      parameters: kind === 'board' ? {
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        tessedit_pageseg_mode: '10',
+        preserve_interword_spaces: '0',
+        user_defined_dpi: '300',
+      } : undefined,
       onProgress: ({ status, progress }) => setOcrProgress(`${status} · ${Math.round(progress * 100)}%`),
     })
     try {
@@ -378,7 +389,13 @@ function App() {
         const cells = await splitBoardImageIntoCells(blob, gridSize)
         const recognized = await recognizeGridCells(cells, adapter, (done, total) => setOcrProgress(`Reading tile ${done} of ${total}`))
         setBoardCells(recognized.map((cell) => cell.suggestedValue))
-        setToast('Board scan complete. Correct every tile before starting.')
+        setBoardReviewCells(recognized.map((cell) => cell.needsReview))
+        const reviewCount = recognized.filter((cell) => cell.needsReview).length
+        setToast(
+          reviewCount > 0
+            ? `Rotation-aware scan complete. Check the ${reviewCount} highlighted ${reviewCount === 1 ? 'tile' : 'tiles'}.`
+            : 'Rotation-aware board scan complete. Review the tiles before starting.',
+        )
       } else {
         const result = await adapter.recognize(blob)
         const rows = createAnswerDraftRows(result)
@@ -586,7 +603,7 @@ function App() {
             hostName={hostName}
             setHostName={setHostName}
             gridSize={gridSize}
-            setGridSize={setGridSize}
+            setGridSize={resizeBoard}
             timerSeconds={timerSeconds}
             setTimerSeconds={setTimerSeconds}
             joinCode={joinCode}
@@ -637,9 +654,13 @@ function App() {
                       <BoardEditor
                         size={gridSize}
                         cells={boardCells}
+                        reviewCells={boardReviewCells}
                         scanning={ocrBusy}
                         onSizeChange={resizeBoard}
-                        onCellChange={(index, value) => setBoardCells((cells) => cells.map((cell, cellIndex) => cellIndex === index ? value : cell))}
+                        onCellChange={(index, value) => {
+                          setBoardCells((cells) => cells.map((cell, cellIndex) => cellIndex === index ? value : cell))
+                          setBoardReviewCells((cells) => cells.map((needsReview, cellIndex) => cellIndex === index ? false : needsReview))
+                        }}
                         onScan={() => setCaptureKind('board')}
                         onConfirm={confirmBoardAndStart}
                       />
