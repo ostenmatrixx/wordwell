@@ -9,7 +9,11 @@ declare module 'tesseract.js' {
       langPath?: string
     },
   ): Promise<{
-    recognize(image: Blob): Promise<{ data?: unknown }>
+    recognize(
+      image: Blob,
+      options?: Record<string, unknown>,
+      output?: { blocks?: boolean },
+    ): Promise<{ data?: unknown }>
     setParameters?(parameters: Record<string, string>): Promise<void>
     terminate(): Promise<void>
   }>

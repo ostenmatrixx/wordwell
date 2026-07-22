@@ -3,6 +3,7 @@ import { Camera, Check, Grid3X3, RefreshCw } from 'lucide-react'
 type Props = {
   size: 4 | 5
   cells: string[]
+  reviewCells?: readonly boolean[]
   scanning?: boolean
   onSizeChange: (size: 4 | 5) => void
   onCellChange: (index: number, value: string) => void
@@ -10,9 +11,10 @@ type Props = {
   onConfirm: () => void
 }
 
-export function BoardEditor({ size, cells, scanning, onSizeChange, onCellChange, onScan, onConfirm }: Props) {
+export function BoardEditor({ size, cells, reviewCells = [], scanning, onSizeChange, onCellChange, onScan, onConfirm }: Props) {
   const expected = size * size
-  const complete = cells.slice(0, expected).every((cell) => /^(?:[A-Z]|QU)$/.test(cell))
+  const complete = cells.length >= expected && cells.slice(0, expected).every((cell) => /^(?:[A-Z]|QU)$/.test(cell))
+  const reviewCount = reviewCells.slice(0, expected).filter(Boolean).length
 
   return (
     <section className="play-card board-editor" aria-labelledby="board-title">
@@ -38,8 +40,9 @@ export function BoardEditor({ size, cells, scanning, onSizeChange, onCellChange,
         {Array.from({ length: expected }, (_, index) => {
           const row = Math.floor(index / size) + 1
           const column = (index % size) + 1
+          const needsReview = Boolean(reviewCells[index])
           return (
-            <label key={index}>
+            <label className={needsReview ? 'needs-review' : undefined} key={index}>
               <span className="sr-only">Row {row}, column {column}</span>
               <input
                 value={cells[index] ?? ''}
@@ -47,13 +50,20 @@ export function BoardEditor({ size, cells, scanning, onSizeChange, onCellChange,
                 autoCapitalize="characters"
                 spellCheck={false}
                 inputMode="text"
+                aria-invalid={needsReview || undefined}
+                title={needsReview ? 'OCR was uncertain about this tile. Check and edit it if needed.' : undefined}
                 onChange={(event) => onCellChange(index, event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2))}
               />
-              <small>{index + 1}</small>
+              <small>{needsReview ? 'Check' : index + 1}</small>
             </label>
           )
         })}
       </div>
+      {reviewCount > 0 && (
+        <p className="board-review-note" role="status">
+          Check the {reviewCount} highlighted {reviewCount === 1 ? 'tile' : 'tiles'}—the rotation-aware scan found competing or low-confidence letters.
+        </p>
+      )}
       <p className="board-help">Use <strong>QU</strong> for a combined Qu tile. Every cell must be one letter or QU.</p>
       <button className="primary-button full-button" type="button" onClick={onConfirm} disabled={!complete}>
         <Check size={18} /> Confirm board and start round
@@ -61,4 +71,3 @@ export function BoardEditor({ size, cells, scanning, onSizeChange, onCellChange,
     </section>
   )
 }
-

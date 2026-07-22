@@ -1,4 +1,9 @@
-import type { GridCellImage } from './grid-image'
+import {
+  createGridCellOcrVariants,
+  type GridCellImage,
+  type GridCellOcrVariant,
+  type GridCellRotation,
+} from './grid-image'
 import { normalizeGridCell } from './grid-path'
 
 export type OcrProgress = {
@@ -48,7 +53,11 @@ type TesseractItem = {
 }
 
 type TesseractWorker = {
-  recognize: (image: Blob) => Promise<{ data?: TesseractItem }>
+  recognize: (
+    image: Blob,
+    options?: Record<string, unknown>,
+    output?: { blocks?: boolean },
+  ) => Promise<{ data?: TesseractItem }>
   setParameters?: (parameters: Record<string, string>) => Promise<void>
   terminate: () => Promise<void>
 }
@@ -105,9 +114,20 @@ function normalizeTesseractResult(data: TesseractItem | undefined): OcrResult {
     (word) => word.text.length > 0,
   )
 
+  const detailedConfidences = [
+    ...lines.map((line) => line.confidence),
+    ...words.map((word) => word.confidence),
+  ].filter((confidence): confidence is number => confidence !== null)
+  const pageConfidence = numberOrNull(safeData.confidence)
+
   return {
     text: textOrEmpty(safeData.text),
-    confidence: numberOrNull(safeData.confidence),
+    confidence:
+      pageConfidence !== null && pageConfidence > 0
+        ? pageConfidence
+        : detailedConfidences.length > 0
+          ? Math.max(...detailedConfidences)
+          : pageConfidence,
     lines,
     words,
   }
@@ -153,7 +173,7 @@ export function createTesseractOcrAdapter(options: TesseractOcrOptions = {}): Oc
   return {
     async recognize(image) {
       const worker = await getWorker()
-      const result = await worker.recognize(image)
+      const result = await worker.recognize(image, {}, { blocks: true })
       return normalizeTesseractResult(result.data)
     },
     async terminate() {
@@ -171,32 +191,118 @@ export type RecognizedGridCell = {
   rawText: string
   suggestedValue: string
   confidence: number | null
+  rotation: GridCellRotation
   needsReview: boolean
+}
+
+export type GridCellRecognitionOptions = {
+  /** Skip the remaining rotations when the upright pass is already very certain. */
+  fastAcceptConfidence?: number
+  reviewConfidence?: number
+  prepareVariants?: (cell: GridCellImage) => Promise<readonly GridCellOcrVariant[]>
+}
+
+type GridCellCandidate = {
+  rawText: string
+  suggestedValue: string
+  confidence: number | null
+  rotation: GridCellRotation
+  exactTileValue: boolean
+}
+
+function candidateFromResult(result: OcrResult, rotation: GridCellRotation): GridCellCandidate {
+  const rawText = result.text.trim()
+  const letters = rawText.toUpperCase().replace(/[^A-Z]/g, '')
+  const exactTileValue = /^(?:[A-Z]|QU)$/.test(letters)
+  const suggestedValue = normalizeGridCell(letters === 'QU' ? 'QU' : letters.slice(0, 1))
+
+  return {
+    rawText,
+    suggestedValue,
+    confidence: result.confidence,
+    rotation,
+    exactTileValue,
+  }
+}
+
+function confidenceValue(candidate: GridCellCandidate) {
+  return candidate.confidence ?? -1
+}
+
+function compareCandidates(left: GridCellCandidate, right: GridCellCandidate) {
+  if (left.exactTileValue !== right.exactTileValue) return left.exactTileValue ? -1 : 1
+  return confidenceValue(right) - confidenceValue(left)
+}
+
+function selectGridCellCandidate(
+  candidates: readonly GridCellCandidate[],
+  reviewConfidence: number,
+) {
+  const ranked = [...candidates].sort(compareCandidates)
+  const best = ranked[0] ?? candidateFromResult({ text: '', confidence: null, lines: [], words: [] }, 0)
+  const competingLetter = ranked.find(
+    (candidate) =>
+      candidate.exactTileValue &&
+      candidate.suggestedValue !== best.suggestedValue,
+  )
+  // Single-glyph OCR confidence is not reliable enough to dismiss a different
+  // valid letter found at another rotation (notably M/W and N/Z). Surface the
+  // ambiguity for the host instead of silently trusting the higher score.
+  const ambiguous = Boolean(best.exactTileValue && competingLetter)
+
+  return {
+    best,
+    needsReview:
+      !best.exactTileValue ||
+      best.confidence === null ||
+      best.confidence < reviewConfidence ||
+      ambiguous,
+  }
 }
 
 export async function recognizeGridCells(
   cells: readonly GridCellImage[],
   adapter: OcrAdapter,
   onCellComplete?: (completed: number, total: number) => void,
+  options: GridCellRecognitionOptions = {},
 ): Promise<RecognizedGridCell[]> {
   const recognized: RecognizedGridCell[] = []
+  const fastAcceptConfidence = options.fastAcceptConfidence ?? 97
+  const reviewConfidence = options.reviewConfidence ?? 75
+  const prepareVariants = options.prepareVariants ?? createGridCellOcrVariants
 
   // Sequential recognition avoids allocating several heavyweight OCR jobs on a phone.
   for (const cell of cells) {
-    const result = await adapter.recognize(cell.blob)
-    const rawText = result.text.trim()
-    const letters = rawText.toUpperCase().replace(/[^A-Z]/g, '')
-    const suggestedValue = normalizeGridCell(letters === 'QU' ? 'QU' : letters.slice(0, 1))
+    const variants = await prepareVariants(cell)
+    const candidates: GridCellCandidate[] = []
+
+    for (const [index, variant] of variants.entries()) {
+      const result = await adapter.recognize(variant.blob)
+      const candidate = candidateFromResult(result, variant.rotation)
+      candidates.push(candidate)
+
+      // Most upright tiles need one pass. Low-confidence or invalid results get
+      // the full four-way search that handles sideways and upside-down tiles.
+      if (
+        index === 0 &&
+        candidate.rotation === 0 &&
+        candidate.exactTileValue &&
+        candidate.confidence !== null &&
+        candidate.confidence >= fastAcceptConfidence
+      ) {
+        break
+      }
+    }
+
+    const selection = selectGridCellCandidate(candidates, reviewConfidence)
     recognized.push({
       row: cell.row,
       column: cell.column,
-      rawText,
-      suggestedValue,
-      confidence: result.confidence,
-      needsReview:
-        !/^(?:[A-Z]|QU)$/.test(suggestedValue) ||
-        result.confidence === null ||
-        result.confidence < 75,
+      rawText: selection.best.rawText,
+      suggestedValue: selection.best.suggestedValue,
+      confidence: selection.best.confidence,
+      rotation: selection.best.rotation,
+      needsReview: selection.needsReview,
     })
     onCellComplete?.(recognized.length, cells.length)
   }

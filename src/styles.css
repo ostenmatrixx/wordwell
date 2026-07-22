@@ -1214,6 +1214,9 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .letter-grid label:nth-child(3n) input { background: var(--mint-light); }
 .letter-grid label:nth-child(4n) input { background: var(--coral-light); }
 .letter-grid small { position: absolute; right: 7px; bottom: 4px; font-size: 7px; font-weight: 900; pointer-events: none; }
+.letter-grid label.needs-review input { outline: 3px solid var(--coral); outline-offset: 2px; background: #fff1a8; }
+.letter-grid label.needs-review small { right: 6px; bottom: 5px; color: #8f312a; font-size: 7px; letter-spacing: .05em; text-transform: uppercase; }
+.board-review-note { width: min(100%, 560px); margin: 0 auto 10px; border: 1.5px solid var(--ink); border-radius: 9px; background: var(--lemon); padding: 9px 12px; color: #5f574d; font-size: 9px; font-weight: 750; line-height: 1.45; text-align: center; }
 .board-help { text-align: center; color: #6c655c; font-size: 10px; }
 
 .live-round { background: var(--lemon); }
