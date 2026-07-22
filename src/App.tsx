@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -41,6 +41,12 @@ import { AnswerReview } from './components/AnswerReview'
 import { BoardEditor } from './components/BoardEditor'
 import { CameraCapture } from './components/CameraCapture'
 import {
+  OnlineWordEntry,
+  type OnlineWord,
+  type OnlineWordSyncState,
+} from './components/OnlineWordEntry'
+import { generateWordFactoryBoard } from './lib/board-generator'
+import {
   answerTextToDraftRows,
   captureDraftKey,
   capturePhotoKey,
@@ -62,6 +68,7 @@ import {
   createNextRound,
   createRoom,
   ensureRoomAuth,
+  expireGeneratedRound,
   fetchRoomState,
   finalizeRoomRound,
   finishRoomGame,
@@ -73,11 +80,13 @@ import {
   publishRoundResults,
   removeRoomMember,
   resumeRoomRound,
+  startGeneratedRound,
   startRoomRound,
   startScrabbleRoom,
   submitScrabbleScore,
   subscribeToRoom,
   subscribeToRound,
+  type BoardSource,
   voidScrabbleScore,
   type GameRound,
   type RoomJoin,
@@ -101,13 +110,14 @@ type StoredRoom = RoomJoin & { roomCode?: string }
 
 const ACTIVE_ROOM_KEY = 'wordwell:multiplayer-room:v1'
 const SCRABBLE_QUEUE_KEY = 'wordwell:scrabble-queue:v1'
+const ONLINE_DRAFT_SUFFIX = ':generated'
 const PLAYER_COLORS = ['coral', 'mint', 'lemon', 'lilac', 'blue', 'peach']
 const captureStore = createCaptureStore()
 
 const MODES: Array<{ id: RoomMode; label: string; short: string; color: string }> = [
   { id: 'scrabble', label: 'Scrabble', short: 'Dictionary checker · manual board score', color: 'lemon' },
   { id: 'boggle', label: 'Boggle', short: '3+ letters · duplicates cancel', color: 'mint' },
-  { id: 'scribbage', label: 'Scribbage / Word Factory', short: '4+ letters · grid verified', color: 'lilac' },
+  { id: 'scribbage', label: 'Scribbage / Word Factory', short: 'Generated or physical · 4+ letters', color: 'lilac' },
 ]
 
 function modeLabel(mode: RoomMode) {
@@ -151,8 +161,24 @@ function formatTimer(seconds: number) {
 
 function roundSeconds(round: GameRound, now: number) {
   if (round.phase !== 'playing' || !round.timerStartedAt || round.timerPausedAt) return round.timerRemainingSeconds
-  const elapsed = Math.floor((now - Date.parse(round.timerStartedAt)) / 1000)
+  const elapsed = Math.max(0, Math.floor((now - Date.parse(round.timerStartedAt)) / 1000))
   return Math.max(0, round.timerRemainingSeconds - elapsed)
+}
+
+function roundCountdown(round: GameRound, now: number) {
+  if (round.phase !== 'playing' || !round.timerStartedAt) return 0
+  return Math.max(0, Math.ceil((Date.parse(round.timerStartedAt) - now) / 1000))
+}
+
+function onlineDraftKey(roundId: string, memberId: string) {
+  return `${captureDraftKey(roundId, memberId)}${ONLINE_DRAFT_SUFFIX}`
+}
+
+type StoredOnlineDraft = {
+  words: OnlineWord[]
+  revision: number
+  clientToken: string
+  dirty: boolean
 }
 
 function resultReason(result: RoundWordResult) {
@@ -179,6 +205,7 @@ function App() {
   const [now, setNow] = useState(Date.now())
 
   const [createMode, setCreateMode] = useState<RoomMode>('boggle')
+  const [boardSource, setBoardSource] = useState<BoardSource>('generated')
   const [playerLimit, setPlayerLimit] = useState(4)
   const [hostPlaying, setHostPlaying] = useState(true)
   const [hostName, setHostName] = useState('Host')
@@ -198,12 +225,27 @@ function App() {
   const [scrabbleWord, setScrabbleWord] = useState('')
   const [scrabblePoints, setScrabblePoints] = useState('')
   const [checkedScrabble, setCheckedScrabble] = useState<boolean | null>(null)
+  const [onlineWords, setOnlineWords] = useState<OnlineWord[]>([])
+  const [onlineSyncState, setOnlineSyncState] = useState<OnlineWordSyncState>('not-submitted')
+
+  const onlineWordsRef = useRef<OnlineWord[]>([])
+  const onlineScopeRef = useRef<string | null>(null)
+  const onlineRevisionRef = useRef(0)
+  const onlineClientTokenRef = useRef('')
+  const onlineDirtyRef = useRef(false)
+  const onlineSaveSequenceRef = useRef(0)
+  const onlineSaveTimerRef = useRef<number | null>(null)
+  const onlineSaveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const processingRoundRef = useRef<string | null>(null)
+  const processingRetryAtRef = useRef(0)
 
   const currentRound = roomState?.rounds.at(-1) ?? null
   const me = roomState?.members.find((member) => member.id === activeRoom?.memberId) ?? null
   const isHost = Boolean(me?.isHost ?? activeRoom?.isHost)
   const players = roomState?.members.filter((member) => member.isPlayer && !member.removedAt) ?? []
   const legacyHistory = useMemo(() => loadHistory().filter((session) => session.status === 'complete'), [])
+  const timerRemaining = currentRound ? roundSeconds(currentRound, now) : 0
+  const countdownRemaining = currentRound ? roundCountdown(currentRound, now) : 0
 
   const refreshRoom = useCallback(async (quiet = false) => {
     if (!activeRoom?.sessionId || !isRoomsSupabaseConfigured || !navigator.onLine) return
@@ -270,6 +312,58 @@ function App() {
   }, [answerRows, submissionMode, queuedSubmission, currentRound?.id, me?.id])
 
   useEffect(() => {
+    if (roomState?.session.boardSource !== 'generated' || !currentRound || currentRound.phase !== 'playing' || !me?.isPlayer) {
+      onlineScopeRef.current = null
+      onlineWordsRef.current = []
+      setOnlineWords([])
+      setOnlineSyncState(currentRound && currentRound.phase !== 'board_setup' ? 'locked' : 'not-submitted')
+      return
+    }
+
+    const scope = `${currentRound.id}:${me.id}`
+    if (onlineScopeRef.current === scope) return
+    onlineScopeRef.current = scope
+    onlineSaveSequenceRef.current = 0
+    onlineSaveChainRef.current = Promise.resolve()
+
+    const receipt = roomState.submissions.find((submission) => submission.roundId === currentRound.id && submission.memberId === me.id)
+    const serverWords = receipt
+      ? roomState.words
+        .filter((word) => word.submissionId === receipt.id)
+        .sort((left, right) => left.position - right.position)
+        .map((word) => ({ id: word.id, value: word.rawText }))
+      : []
+
+    onlineWordsRef.current = serverWords
+    onlineRevisionRef.current = receipt?.revision ?? 0
+    onlineClientTokenRef.current = receipt?.clientToken || crypto.randomUUID()
+    onlineDirtyRef.current = false
+    setOnlineWords(serverWords)
+    setOnlineSyncState(receipt ? 'saved' : navigator.onLine ? 'not-submitted' : 'offline')
+
+    void captureStore.loadDraft<StoredOnlineDraft>(onlineDraftKey(currentRound.id, me.id)).then((saved) => {
+      if (onlineScopeRef.current !== scope) return
+      if (onlineDirtyRef.current) return
+      const useLocal = Boolean(saved && (saved.dirty || saved.revision >= (receipt?.revision ?? 0)))
+      const words = useLocal && saved ? saved.words : serverWords
+      const revision = Math.max(receipt?.revision ?? 0, saved?.revision ?? 0)
+      onlineWordsRef.current = words
+      onlineRevisionRef.current = revision
+      onlineClientTokenRef.current = saved?.clientToken || receipt?.clientToken || crypto.randomUUID()
+      onlineDirtyRef.current = Boolean(saved?.dirty)
+      setOnlineWords(words)
+      if (currentRound.phase !== 'playing') setOnlineSyncState('locked')
+      else if (saved?.dirty) setOnlineSyncState(navigator.onLine ? 'not-submitted' : 'offline')
+      else if (receipt) setOnlineSyncState('saved')
+      else setOnlineSyncState(navigator.onLine ? 'not-submitted' : 'offline')
+    })
+  }, [roomState?.session.boardSource, currentRound?.id, currentRound?.phase, me?.id])
+
+  useEffect(() => () => {
+    if (onlineSaveTimerRef.current !== null) window.clearTimeout(onlineSaveTimerRef.current)
+  }, [])
+
+  useEffect(() => {
     if (!toast) return
     const timeout = window.setTimeout(() => setToast(null), 4200)
     return () => window.clearTimeout(timeout)
@@ -299,6 +393,7 @@ function App() {
       await ensureRoomAuth()
       const joined = await createRoom({
         mode: createMode,
+        boardSource: createMode === 'scribbage' ? boardSource : 'physical',
         playerLimit,
         hostPlayerName: hostPlaying ? hostName : null,
         gridSize,
@@ -351,6 +446,10 @@ function App() {
     setAnswerRows([])
     setSubmissionMode('draft')
     setQueuedSubmission(null)
+    setOnlineWords([])
+    onlineWordsRef.current = []
+    onlineScopeRef.current = null
+    setOnlineSyncState('not-submitted')
     setGridSize(4)
     setBoardCells(Array(16).fill(''))
     setBoardReviewCells(Array(16).fill(false))
@@ -425,6 +524,101 @@ function App() {
     } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
   }
 
+  async function startOnlineRound() {
+    if (!currentRound || players.length < 2) { setToast('At least two players must join first.'); return }
+    setBusy(true)
+    try {
+      const grid = generateWordFactoryBoard(currentRound.gridSize)
+      await startGeneratedRound(currentRound.id, grid)
+      processingRetryAtRef.current = 0
+      onlineScopeRef.current = null
+      onlineWordsRef.current = []
+      setOnlineWords([])
+      setOnlineSyncState('not-submitted')
+      await refreshRoom(true)
+    } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
+  }
+
+  function persistOnlineDraft(words: OnlineWord[], dirty: boolean, revision = onlineRevisionRef.current) {
+    if (!currentRound || !me) return
+    if (!onlineClientTokenRef.current) onlineClientTokenRef.current = crypto.randomUUID()
+    void captureStore.saveDraft<StoredOnlineDraft>(onlineDraftKey(currentRound.id, me.id), {
+      words,
+      revision,
+      clientToken: onlineClientTokenRef.current,
+      dirty,
+    })
+  }
+
+  function enqueueOnlineSync(words: OnlineWord[]) {
+    if (!currentRound || !me || roomState?.session.boardSource !== 'generated') return
+    const scope = `${currentRound.id}:${me.id}`
+    const sequence = ++onlineSaveSequenceRef.current
+    const roundId = currentRound.id
+    const clientToken = onlineClientTokenRef.current || crypto.randomUUID()
+    onlineClientTokenRef.current = clientToken
+    setOnlineSyncState('saving')
+
+    onlineSaveChainRef.current = onlineSaveChainRef.current.catch(() => undefined).then(async () => {
+      if (onlineScopeRef.current !== scope) return
+      if (!navigator.onLine) throw new Error('OFFLINE')
+      const revision = onlineRevisionRef.current + 1
+      onlineRevisionRef.current = revision
+      await confirmRoundSubmission(roundId, clientToken, revision, words.map((word) => ({
+        id: word.id,
+        rawText: word.value,
+        normalized: word.value,
+        confidence: null,
+      })))
+      if (onlineScopeRef.current !== scope) return
+      if (sequence === onlineSaveSequenceRef.current) {
+        onlineDirtyRef.current = false
+        setOnlineSyncState('saved')
+        persistOnlineDraft(words, false, revision)
+      }
+    }).catch((error: unknown) => {
+      if (onlineScopeRef.current !== scope || sequence !== onlineSaveSequenceRef.current) return
+      const offline = !navigator.onLine || errorMessage(error) === 'OFFLINE'
+      setOnlineSyncState(offline ? 'offline' : 'not-submitted')
+      persistOnlineDraft(onlineWordsRef.current, true)
+      if (!offline && !/before|paused|closed|deadline|not open/i.test(errorMessage(error))) setToast(errorMessage(error))
+    })
+  }
+
+  function updateOnlineWords(words: OnlineWord[], immediate: boolean) {
+    onlineWordsRef.current = words
+    onlineDirtyRef.current = true
+    setOnlineWords(words)
+    persistOnlineDraft(words, true)
+    if (onlineSaveTimerRef.current !== null) window.clearTimeout(onlineSaveTimerRef.current)
+    if (!navigator.onLine) {
+      setOnlineSyncState('offline')
+      return
+    }
+    if (!currentRound || currentRound.timerPausedAt || roundCountdown(currentRound, Date.now()) > 0 || roundSeconds(currentRound, Date.now()) <= 0) {
+      setOnlineSyncState('not-submitted')
+      return
+    }
+    setOnlineSyncState('saving')
+    onlineSaveTimerRef.current = window.setTimeout(() => {
+      onlineSaveTimerRef.current = null
+      enqueueOnlineSync(words)
+    }, immediate ? 0 : 350)
+  }
+
+  function addOnlineWord(word: string) {
+    if (onlineWordsRef.current.length >= 250) { setToast('A round can contain up to 250 answers.'); return }
+    updateOnlineWords([...onlineWordsRef.current, { id: crypto.randomUUID(), value: word }], true)
+  }
+
+  function changeOnlineWord(id: string, word: string) {
+    updateOnlineWords(onlineWordsRef.current.map((item) => item.id === id ? { ...item, value: word } : item), false)
+  }
+
+  function removeOnlineWord(id: string) {
+    updateOnlineWords(onlineWordsRef.current.filter((word) => word.id !== id), true)
+  }
+
   async function roomAction(action: () => Promise<unknown>) {
     setBusy(true)
     try { await action(); await refreshRoom(true) } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
@@ -462,17 +656,30 @@ function App() {
     } finally { setBusy(false) }
   }
 
-  async function closeAndReveal() {
-    if (!currentRound || !dictionary || !roomState) return
+  async function processRound(closeMode: 'manual' | 'expired' | 'resume' = 'manual') {
+    if (!currentRound || !dictionary || !roomState || processingRoundRef.current === currentRound.id) return
+    const processingRoundId = currentRound.id
+    processingRoundRef.current = processingRoundId
     setBusy(true)
     try {
-      const closed = await closeRoomRound(currentRound.id)
-      if (!closed) throw new Error('Could not close this round.')
-      const snapshot = await getFrozenRoundSnapshot(currentRound.id)
+      const latestState = await fetchRoomState(roomState.session.id) ?? roomState
+      const latestRound = latestState.rounds.find((round) => round.id === processingRoundId) ?? currentRound
+      let frozenRevision = latestRound.frozenRevision
+      if (latestRound.phase === 'playing') {
+        const closed = closeMode === 'expired'
+          ? await expireGeneratedRound(latestRound.id)
+          : await closeRoomRound(latestRound.id)
+        if (!closed) throw new Error('Could not close this round.')
+        frozenRevision = closed.frozenRevision
+      } else if (latestRound.phase !== 'processing') {
+        return
+      }
+      if (!frozenRevision) throw new Error('Could not identify the frozen round revision.')
+      const snapshot = await getFrozenRoundSnapshot(latestRound.id)
       if (!snapshot) throw new Error('Could not prepare the frozen submissions.')
       const evaluation = evaluateGridRound({
-        mode: roomState.session.mode === 'scribbage' ? 'scribbage' : 'boggle',
-        grid: currentRound.grid,
+        mode: latestState.session.mode === 'scribbage' ? 'scribbage' : 'boggle',
+        grid: latestRound.grid,
         submissions: snapshot.submissions.map((submission) => ({
           playerId: submission.memberId,
           playerName: submission.playerName,
@@ -492,10 +699,26 @@ function App() {
         score: word.score,
         eligible: word.valid,
       })))
-      await publishRoundResults(currentRound.id, closed.frozenRevision, results)
+      await publishRoundResults(latestRound.id, frozenRevision, results)
+      processingRetryAtRef.current = 0
       await refreshRoom(true)
       setToast('Round revealed. Matching words have been crossed out for everyone.')
-    } catch (error) { setToast(errorMessage(error)) } finally { setBusy(false) }
+    } catch (error) {
+      if (/timer is still running/i.test(errorMessage(error))) processingRetryAtRef.current = Date.now() + 5_000
+      else setToast(errorMessage(error))
+    } finally {
+      processingRoundRef.current = null
+      setBusy(false)
+    }
+  }
+
+  async function closeAndReveal() {
+    await processRound('manual')
+  }
+
+  async function endGeneratedRoundEarly() {
+    if (!window.confirm('End the round now? All players’ lists will lock immediately.')) return
+    await processRound('manual')
   }
 
   async function overrideResult(result: RoundWordResult, check: 'dictionary' | 'grid_path') {
@@ -557,6 +780,33 @@ function App() {
     })()
   }, [isOnline, roomState?.session.id, roomState?.session.mode, refreshRoom])
 
+  useEffect(() => {
+    if (roomState?.session.boardSource !== 'generated' || currentRound?.phase !== 'playing') return
+    if (countdownRemaining === 0 && timerRemaining === 0) {
+      if (onlineSaveTimerRef.current !== null) {
+        window.clearTimeout(onlineSaveTimerRef.current)
+        onlineSaveTimerRef.current = null
+      }
+      setOnlineSyncState('locked')
+      return
+    }
+    if (!me?.isPlayer || !isOnline || currentRound.timerPausedAt || countdownRemaining > 0 || !onlineDirtyRef.current) return
+    if (onlineSyncState === 'saving') return
+    enqueueOnlineSync(onlineWordsRef.current)
+  }, [isOnline, onlineSyncState, roomState?.session.boardSource, currentRound?.phase, currentRound?.timerPausedAt, countdownRemaining, timerRemaining, me?.id])
+
+  useEffect(() => {
+    if (!isHost || !dictionary || roomState?.session.boardSource !== 'generated' || !currentRound) return
+    if (currentRound.phase === 'processing') {
+      void processRound('resume')
+      return
+    }
+    if (currentRound.phase === 'playing' && !currentRound.timerPausedAt && countdownRemaining === 0 && timerRemaining === 0) {
+      if (Date.now() < processingRetryAtRef.current) return
+      void processRound('expired')
+    }
+  }, [isHost, Boolean(dictionary), roomState?.session.boardSource, currentRound?.id, currentRound?.phase, currentRound?.timerPausedAt, countdownRemaining, timerRemaining, now])
+
   const scoreboard = useMemo(() => {
     if (!roomState) return []
     return players.map((player, index) => {
@@ -570,8 +820,6 @@ function App() {
       return { ...player, color: PLAYER_COLORS[index % PLAYER_COLORS.length], score: scrabble + grid }
     }).sort((left, right) => right.score - left.score)
   }, [roomState, players])
-
-  const timerRemaining = currentRound ? roundSeconds(currentRound, now) : 0
 
   return (
     <div className="app-shell room-app">
@@ -596,6 +844,11 @@ function App() {
             setView={setLandingView}
             createMode={createMode}
             setCreateMode={setCreateMode}
+            boardSource={boardSource}
+            setBoardSource={(source) => {
+              setBoardSource(source)
+              if (source === 'generated' && timerSeconds === 0) setTimerSeconds(180)
+            }}
             playerLimit={playerLimit}
             setPlayerLimit={setPlayerLimit}
             hostPlaying={hostPlaying}
@@ -626,6 +879,7 @@ function App() {
               me={me}
               onShare={copyRoomLink}
               onLeave={leaveRoom}
+              compact={roomState.session.boardSource === 'generated' && currentRound?.phase === 'playing'}
             />
             <div className="room-layout">
               <div className="round-column">
@@ -648,7 +902,19 @@ function App() {
                 )}
 
                 {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'board_setup' && (
-                  isHost ? (
+                  roomState.session.boardSource === 'generated' ? (
+                    isHost ? (
+                      <LobbyPanel
+                        room={roomState}
+                        me={me}
+                        isHost
+                        busy={busy}
+                        onRemove={(id) => roomAction(() => removeRoomMember(id))}
+                        onStart={startOnlineRound}
+                        startLabel={`Generate ${currentRound.gridSize}×${currentRound.gridSize} board & start`}
+                      />
+                    ) : <WaitingPanel icon={<Gamepad2 />} title="Waiting for the host to generate the board" copy="Keep this screen open. Everyone gets the same board after a synchronized three-second countdown." />
+                  ) : isHost ? (
                     <>
                       <LobbyPanel room={roomState} me={me} isHost busy={busy} onRemove={(id) => roomAction(() => removeRoomMember(id))} />
                       <BoardEditor
@@ -669,10 +935,27 @@ function App() {
                 )}
 
                 {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'playing' && (
-                  <LiveRoundPanel round={currentRound} seconds={timerRemaining} isHost={isHost} busy={busy} onPause={() => roomAction(() => pauseRoomRound(currentRound.id))} onResume={() => roomAction(() => resumeRoomRound(currentRound.id))} onCollect={() => roomAction(() => openRoundSubmissions(currentRound.id))} />
+                  roomState.session.boardSource === 'generated' ? (
+                    <OnlineWordEntry
+                      round={currentRound}
+                      seconds={timerRemaining}
+                      countdown={countdownRemaining}
+                      words={onlineWords}
+                      syncState={onlineSyncState}
+                      isPlayer={Boolean(me?.isPlayer)}
+                      isHost={isHost}
+                      busy={busy}
+                      onAdd={addOnlineWord}
+                      onChange={changeOnlineWord}
+                      onRemove={removeOnlineWord}
+                      onPause={() => roomAction(() => pauseRoomRound(currentRound.id))}
+                      onResume={() => roomAction(() => resumeRoomRound(currentRound.id))}
+                      onEnd={endGeneratedRoundEarly}
+                    />
+                  ) : <LiveRoundPanel round={currentRound} seconds={timerRemaining} isHost={isHost} busy={busy} onPause={() => roomAction(() => pauseRoomRound(currentRound.id))} onResume={() => roomAction(() => resumeRoomRound(currentRound.id))} onCollect={() => roomAction(() => openRoundSubmissions(currentRound.id))} />
                 )}
 
-                {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'collecting' && (
+                {roomState.session.mode !== 'scrabble' && roomState.session.boardSource === 'physical' && currentRound?.phase === 'collecting' && (
                   <>
                     {me?.isPlayer && submissionMode !== 'submitted' ? (
                       <AnswerReview
@@ -714,7 +997,7 @@ function App() {
         )}
       </main>
 
-      <footer><p>Made for kitchen tables, rainy afternoons, and extremely serious rematches.</p><span>Wordwell v0.3</span></footer>
+      <footer><p>Made for kitchen tables, rainy afternoons, and extremely serious rematches.</p><span>Wordwell v0.4</span></footer>
 
       {captureKind && <CameraCapture title={captureKind === 'board' ? 'Scan the letter board' : 'Scan your answer sheet'} instruction={captureKind === 'board' ? `Use the ${gridSize}×${gridSize} guide to align the full square board.` : 'Crop to the handwritten answers you want included.'} aspect={captureKind === 'board' ? 1 : undefined} gridSize={captureKind === 'board' ? gridSize : undefined} onCancel={() => setCaptureKind(null)} onConfirm={handleCapturedImage} />}
       {ocrBusy && <div className="ocr-status" role="status"><LoaderCircle className="spin" /><span><strong>Reading locally</strong><small>{ocrProgress}</small></span></div>}
@@ -729,6 +1012,8 @@ type LandingProps = {
   setView: (view: LandingView) => void
   createMode: RoomMode
   setCreateMode: (mode: RoomMode) => void
+  boardSource: BoardSource
+  setBoardSource: (source: BoardSource) => void
   playerLimit: number
   setPlayerLimit: (count: number) => void
   hostPlaying: boolean
@@ -795,22 +1080,23 @@ function Landing(props: LandingProps) {
       <button className="back-button" type="button" onClick={() => props.setView('home')}><ArrowLeft size={17} /> Back</button>
       <div className="create-card">
         <div className="create-heading"><div><p className="eyebrow"><Gamepad2 size={16} /> Host a new game</p><h1>Set the <em>rules.</em></h1></div><p>Players join from their own phones after you create the room.</p></div>
-        <div className="setup-block"><span className="setup-number">01</span><div><h2>Choose the game</h2><div className="mode-picker setup-modes">{MODES.map((mode) => <button key={mode.id} className={`${mode.color} ${props.createMode === mode.id ? 'is-selected' : ''}`} type="button" onClick={() => props.setCreateMode(mode.id)}><span>{mode.label}</span><small>{mode.short}</small>{props.createMode === mode.id && <Check size={17} />}</button>)}</div></div></div>
+        <div className="setup-block"><span className="setup-number">01</span><div><h2>Choose the game</h2><div className="mode-picker setup-modes">{MODES.map((mode) => <button key={mode.id} className={`${mode.color} ${props.createMode === mode.id ? 'is-selected' : ''}`} type="button" onClick={() => { props.setCreateMode(mode.id); if (mode.id === 'scribbage' && props.boardSource === 'generated' && props.timerSeconds === 0) props.setTimerSeconds(180) }}><span>{mode.label}</span><small>{mode.short}</small>{props.createMode === mode.id && <Check size={17} />}</button>)}</div></div></div>
         <div className="setup-block"><span className="setup-number">02</span><div className="setup-grid"><label><span>Player limit</span><div className="player-counter"><button type="button" onClick={() => props.setPlayerLimit(Math.max(2, props.playerLimit - 1))}><Minus /></button><strong>{props.playerLimit}</strong><button type="button" onClick={() => props.setPlayerLimit(Math.min(6, props.playerLimit + 1))}><Plus /></button></div></label><label className="toggle-label"><span>Host is playing</span><input type="checkbox" checked={props.hostPlaying} onChange={(event) => props.setHostPlaying(event.target.checked)} /></label>{props.hostPlaying && <label><span>Your player name</span><input value={props.hostName} onChange={(event) => props.setHostName(event.target.value)} maxLength={30} /></label>}</div></div>
-        {props.createMode !== 'scrabble' && <div className="setup-block"><span className="setup-number">03</span><div className="setup-grid"><label><span>Board size</span><select value={props.gridSize} onChange={(event) => props.setGridSize(Number(event.target.value) as 4 | 5)}><option value="4">4 × 4</option><option value="5">5 × 5</option></select></label><label><span>Round timer</span><select value={props.timerSeconds} onChange={(event) => props.setTimerSeconds(Number(event.target.value))}><option value="0">No timer</option><option value="120">2 minutes</option><option value="180">3 minutes</option><option value="300">5 minutes</option></select></label></div></div>}
-        <div className="create-action"><p><Users size={16} /> Up to {props.playerLimit} players · {modeLabel(props.createMode)}</p><button className="primary-button" type="button" onClick={props.onCreate} disabled={props.busy}>{props.busy ? 'Creating…' : 'Create room'} <ArrowRight size={18} /></button></div>
+        {props.createMode === 'scribbage' && <div className="setup-block"><span className="setup-number">03</span><div><h2>Choose the board</h2><div className="board-source-picker"><button className={props.boardSource === 'generated' ? 'is-selected' : ''} type="button" onClick={() => props.setBoardSource('generated')}><Gamepad2 /><span><strong>Generated board</strong><small>Play the whole round online</small></span>{props.boardSource === 'generated' && <Check />}</button><button className={props.boardSource === 'physical' ? 'is-selected' : ''} type="button" onClick={() => props.setBoardSource('physical')}><Camera /><span><strong>Physical board</strong><small>Scan your real tile setup</small></span>{props.boardSource === 'physical' && <Check />}</button></div></div></div>}
+        {props.createMode !== 'scrabble' && <div className="setup-block"><span className="setup-number">{props.createMode === 'scribbage' ? '04' : '03'}</span><div className="setup-grid"><label><span>Board size</span><select value={props.gridSize} onChange={(event) => props.setGridSize(Number(event.target.value) as 4 | 5)}><option value="4">4 × 4</option><option value="5">5 × 5</option></select></label><label><span>Round timer</span><select value={props.timerSeconds} onChange={(event) => props.setTimerSeconds(Number(event.target.value))}>{!(props.createMode === 'scribbage' && props.boardSource === 'generated') && <option value="0">No timer</option>}<option value="120">2 minutes</option><option value="180">3 minutes</option><option value="300">5 minutes</option></select></label></div></div>}
+        <div className="create-action"><p><Users size={16} /> Up to {props.playerLimit} players · {modeLabel(props.createMode)}{props.createMode === 'scribbage' ? ` · ${props.boardSource === 'generated' ? 'Online board' : 'Physical board'}` : ''}</p><button className="primary-button" type="button" onClick={props.onCreate} disabled={props.busy}>{props.busy ? 'Creating…' : 'Create room'} <ArrowRight size={18} /></button></div>
       </div>
     </section>
   )
 }
 
-function RoomMasthead({ room, code, me, onShare, onLeave }: { room: RoomState; code?: string; me: RoomMember | null; onShare: () => void; onLeave: () => void }) {
-  return <section className="room-masthead"><div><p className="eyebrow"><Wifi size={16} /> Live room · {me?.isHost ? 'You are host' : `Playing as ${me?.displayName ?? 'guest'}`}</p><h1>{modeLabel(room.session.mode)}<br /><em>face-off.</em></h1></div><div className="room-code-card"><span>Room code</span><strong>{code ?? '••••••'}</strong><div><button type="button" onClick={onShare}><Copy size={16} /> Share</button><button type="button" onClick={onLeave}><X size={16} /> Leave</button></div></div></section>
+function RoomMasthead({ room, code, me, onShare, onLeave, compact = false }: { room: RoomState; code?: string; me: RoomMember | null; onShare: () => void; onLeave: () => void; compact?: boolean }) {
+  return <section className={`room-masthead${compact ? ' is-compact' : ''}`}><div><p className="eyebrow"><Wifi size={16} /> Live room · {me?.isHost ? 'You are host' : `Playing as ${me?.displayName ?? 'guest'}`}</p><h1>{modeLabel(room.session.mode)}<br /><em>face-off.</em></h1></div><div className="room-code-card"><span>Room code</span><strong>{code ?? '••••••'}</strong><div><button type="button" onClick={onShare}><Copy size={16} /> Share</button><button type="button" onClick={onLeave}><X size={16} /> Leave</button></div></div></section>
 }
 
-function LobbyPanel({ room, me, isHost, busy, onRemove, onStart }: { room: RoomState; me: RoomMember | null; isHost: boolean; busy: boolean; onRemove: (id: string) => void; onStart?: () => void }) {
+function LobbyPanel({ room, me, isHost, busy, onRemove, onStart, startLabel = 'Start Scrabble game' }: { room: RoomState; me: RoomMember | null; isHost: boolean; busy: boolean; onRemove: (id: string) => void; onStart?: () => void; startLabel?: string }) {
   const players = room.members.filter((member) => member.isPlayer)
-  return <section className="play-card lobby-card"><div className="card-heading"><div><p className="section-kicker">Live lobby</p><h2><Users size={22} /> {players.length} of {room.session.playerLimit} players joined</h2><p>{isHost ? 'Share the room code, then begin when everyone is here.' : 'You are in. Waiting for the host to begin.'}</p></div><span className="status-chip waiting">Open</span></div><ul className="lobby-list">{room.members.map((member, index) => <li key={member.id}><span className={`player-swatch ${PLAYER_COLORS[index % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0).toUpperCase()}</span><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? 'Host' : 'Player'} · Joined</small></span>{member.isHost ? <Crown size={18} /> : isHost && <button type="button" onClick={() => onRemove(member.id)} aria-label={`Remove ${member.displayName}`}><UserMinus size={17} /></button>}</li>)}</ul>{onStart && isHost && <button className="primary-button full-button" type="button" onClick={onStart} disabled={busy || players.length < 2}><Play size={18} /> Start Scrabble game</button>}</section>
+  return <section className="play-card lobby-card"><div className="card-heading"><div><p className="section-kicker">Live lobby</p><h2><Users size={22} /> {players.length} of {room.session.playerLimit} players joined</h2><p>{isHost ? 'Share the room code, then begin when everyone is here.' : 'You are in. Waiting for the host to begin.'}</p></div><span className="status-chip waiting">Open</span></div><ul className="lobby-list">{room.members.map((member, index) => <li key={member.id}><span className={`player-swatch ${PLAYER_COLORS[index % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0).toUpperCase()}</span><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? 'Host' : 'Player'} · Joined</small></span>{member.isHost ? <Crown size={18} /> : isHost && <button type="button" onClick={() => onRemove(member.id)} aria-label={`Remove ${member.displayName}`}><UserMinus size={17} /></button>}</li>)}</ul>{onStart && isHost && <button className="primary-button full-button" type="button" onClick={onStart} disabled={busy || players.length < 2}><Play size={18} /> {startLabel}</button>}</section>
 }
 
 function LiveRoundPanel({ round, seconds, isHost, busy, onPause, onResume, onCollect }: { round: GameRound; seconds: number; isHost: boolean; busy: boolean; onPause: () => void; onResume: () => void; onCollect: () => void }) {
@@ -844,7 +1130,7 @@ function Scoreboard({ scores, mode }: { scores: Array<RoomMember & { color: stri
 }
 
 function Roster({ room, me, currentRound, presence }: { room: RoomState; me: RoomMember | null; currentRound: GameRound | null; presence: RoomPresence[] }) {
-  return <section className="roster-card"><div className="history-title-row"><div><p className="section-kicker">Around the table</p><h2><Users size={20} /> Players</h2></div></div><ul>{room.members.map((member) => { const ready = currentRound && room.submissions.some((submission) => submission.roundId === currentRound.id && submission.memberId === member.id && submission.status === 'confirmed'); const online = member.id === me?.id || presence.some((item) => item.userId === member.userId); return <li key={member.id}><span className={`presence-dot ${online ? '' : 'is-offline'}`} /><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? `Host · ${online ? 'Online' : 'Offline'}` : ready ? 'Ready' : online ? 'Connected' : 'Offline'}</small></span>{ready && <Check size={17} />}</li>})}</ul></section>
+  return <section className="roster-card"><div className="history-title-row"><div><p className="section-kicker">Around the table</p><h2><Users size={20} /> Players</h2></div></div><ul>{room.members.map((member) => { const revealReady = currentRound && ['collecting', 'review', 'finalized'].includes(currentRound.phase); const ready = revealReady && room.submissions.some((submission) => submission.roundId === currentRound.id && submission.memberId === member.id && submission.status === 'confirmed'); const online = member.id === me?.id || presence.some((item) => item.userId === member.userId); return <li key={member.id}><span className={`presence-dot ${online ? '' : 'is-offline'}`} /><span><strong>{member.displayName}{member.id === me?.id ? ' · You' : ''}</strong><small>{member.isHost ? `Host · ${online ? 'Online' : 'Offline'}` : ready ? 'Ready' : online ? 'Connected' : 'Offline'}</small></span>{ready && <Check size={17} />}</li>})}</ul></section>
 }
 
 function ScrabbleHistory({ room, isHost, onVoid }: { room: RoomState; isHost: boolean; onVoid: (entryId: string) => void }) {
