@@ -1,8 +1,19 @@
 # Wordwell
 
-An installable, offline-capable scorekeeper for Scrabble, Boggle, and Scribbage / Word Factory. Create a room, let every player join from their own phone, and keep the game moving without passing around one device.
+[![License: MIT](https://img.shields.io/badge/License-MIT-6d5bd0.svg)](LICENSE)
+[![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
+[![PWA](https://img.shields.io/badge/PWA-offline--ready-f6bd60.svg)](https://web.dev/progressive-web-apps/)
+
+> An offline-first, multiplayer scorekeeper and word validator for Scrabble, Boggle, and Scribbage / Word Factory.
+
+## About Wordwell
+
+Wordwell replaces the shared paper score sheet without replacing the physical word game. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
 
 Wordwell is a progressive web app built with React, TypeScript, Vite, and Supabase. Its camera and OCR workflow runs on the player's device, while PostgreSQL and Realtime keep multiplayer rooms synchronized.
+
+The project is an open-source MVP. The core scoring, room, camera, OCR, and offline flows are implemented, but you should review the production-security checklist before hosting a public instance.
 
 ## Features
 
@@ -15,6 +26,22 @@ Wordwell is a progressive web app built with React, TypeScript, Vite, and Supaba
 - Automatic dictionary, board-path, minimum-length, and duplicate checking
 - Live roster, readiness, timer, reveal, score ledger, and scoreboard updates
 - Scrabble dictionary checking with manual board-score entry
+
+## Tech stack
+
+| Area | Technology | Role in Wordwell |
+| --- | --- | --- |
+| Web app | React 19, TypeScript, Vite 7 | Component UI, type safety, and builds |
+| PWA | `vite-plugin-pwa`, Workbox | Installation, service worker, and offline assets |
+| Backend | Supabase, PostgreSQL | Rooms, rounds, submissions, score history, and row-level security |
+| Multiplayer | Supabase Realtime | Live rosters, game state, submissions, and score updates |
+| Authentication | Supabase anonymous auth | A temporary identity for each player device |
+| OCR | Tesseract.js | On-device recognition of photographed answer sheets |
+| Camera and crop | Media capture, `react-easy-crop` | Photographing and reviewing boards or answer sheets |
+| Offline storage | IndexedDB, `idb-keyval` | Recoverable answer drafts and temporary local data |
+| Dictionary | `sowpods` | Bundled offline word validation |
+| Testing | Vitest | Scoring, OCR, grid-path, image, and storage tests |
+| Styling | Handwritten CSS, Lucide icons, Fontsource | Responsive vibrant-pastel interface |
 
 ## Game scoring
 
@@ -38,7 +65,7 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 
 Photos are processed locally and are not uploaded to Supabase. The temporary image is removed after local OCR finishes; reviewed drafts can remain on the phone so a lost connection does not erase a player's work.
 
-## Local development
+## Getting started
 
 Requirements: a current Node.js LTS release, npm, and a Supabase project for multiplayer features.
 
@@ -67,6 +94,17 @@ VITE_SUPABASE_ANON_KEY=your-publishable-key
 Only the public Supabase URL and publishable key belong in `VITE_*` variables. Never expose the PostgreSQL password, service-role key, or another server secret to the browser.
 
 Before a public production launch, configure CAPTCHA/Turnstile for anonymous sign-in, rate limits and data-retention cleanup, private Realtime channels, and deployment security headers.
+
+## Production deployment
+
+Wordwell is a static Vite application and can be hosted on Vercel, Netlify, Cloudflare Pages, or another static host. Configure these build-time variables in the hosting provider for both preview and production environments:
+
+```dotenv
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-publishable-key
+```
+
+Use `npm run build` as the build command and `dist` as the output directory. Never commit `.env.local`; it is intentionally ignored by Git.
 
 ## Commands
 
@@ -104,6 +142,24 @@ The project includes tests for:
 
 Run `npm test` and `npm run build` before publishing changes.
 
+## Contributing
+
+Contributions, bug reports, and feature ideas are welcome.
+
+1. Fork the repository and create a focused branch from `main`.
+2. Install dependencies with `npm ci`.
+3. Make the change and add or update tests when behavior changes.
+4. Run `npm test` and `npm run build`.
+5. Open a pull request describing the problem, solution, and validation.
+
+Please keep game rules configurable where editions or house rules can differ. Do not include Supabase passwords, service-role keys, player photos, or other private data in issues, commits, or test fixtures.
+
+## Security
+
+The browser requires a Supabase publishable/anon key; that key is public by design and must be protected by row-level security policies. Database passwords and service-role keys are secrets and must never be exposed through `VITE_*` variables.
+
+If you discover a vulnerability, avoid posting exploitable details in a public issue. Contact the repository owner privately through their GitHub profile first.
+
 ## License
 
-[MIT](LICENSE) © 2026 Osten
+Wordwell is open-source software available under the [MIT License](LICENSE). © 2026 Osten.
