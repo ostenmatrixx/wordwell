@@ -1,4 +1,5 @@
 export type GameMode = 'scrabble' | 'boggle' | 'scribbage'
+export type BoardSource = 'physical' | 'generated'
 
 export type RoomPhase = 'lobby' | 'active' | 'complete'
 export type RoundPhase = 'board_setup' | 'playing' | 'collecting' | 'processing' | 'review' | 'finalized'
@@ -22,6 +23,7 @@ export type RoomMember = {
 export type GameRoom = {
   id: string
   mode: GameMode
+  boardSource?: BoardSource
   roomCode?: string
   phase: RoomPhase
   playerLimit: number

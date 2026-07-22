@@ -5,11 +5,11 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
 [![PWA](https://img.shields.io/badge/PWA-offline--ready-f6bd60.svg)](https://web.dev/progressive-web-apps/)
 
-> An offline-first, multiplayer scorekeeper and word validator for Scrabble, Boggle, and Scribbage / Word Factory.
+> An offline-first multiplayer scorekeeper, word validator, and online Word Factory game for Scrabble, Boggle, and Scribbage.
 
 ## About Wordwell
 
-Wordwell replaces the shared paper score sheet without replacing the physical word game. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
+Wordwell replaces the shared paper score sheet without replacing the physical word game—and can now become the Word Factory board itself. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
 
 Wordwell is a progressive web app built with React, TypeScript, Vite, and Supabase. Its camera and OCR workflow runs on the player's device, while PostgreSQL and Realtime keep multiplayer rooms synchronized.
 
@@ -22,6 +22,9 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 - Six-character room codes with anonymous Supabase authentication
 - Camera capture, cropping, on-device handwriting OCR, and manual answer review
 - Host-confirmed 4×4 or 5×5 Boggle/Scribbage boards
+- Online Word Factory with balanced generated 4×4 or 5×5 dice boards
+- Synchronized countdown, server-authoritative timer, global pause, and automatic reveal
+- Private quick entry with revisioned autosave and offline draft recovery
 - Private parallel submissions that reveal together when the host closes the round
 - Automatic dictionary, board-path, minimum-length, and duplicate checking
 - Live roster, readiness, timer, reveal, score ledger, and scoreboard updates
@@ -34,13 +37,13 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 | Web app | React 19, TypeScript, Vite 7 | Component UI, type safety, and builds |
 | PWA | `vite-plugin-pwa`, Workbox | Installation, service worker, and offline assets |
 | Backend | Supabase, PostgreSQL | Rooms, rounds, submissions, score history, and row-level security |
-| Multiplayer | Supabase Realtime | Live rosters, game state, submissions, and score updates |
+| Multiplayer | Supabase Realtime, PostgreSQL RPCs | Live rosters, synchronized rounds, authoritative deadlines, submissions, and score updates |
 | Authentication | Supabase anonymous auth | A temporary identity for each player device |
 | OCR | Tesseract.js | On-device recognition of photographed answer sheets |
 | Camera and crop | Media capture, `react-easy-crop` | Photographing and reviewing boards or answer sheets |
 | Offline storage | IndexedDB, `idb-keyval` | Recoverable answer drafts and temporary local data |
 | Dictionary | `sowpods` | Bundled offline word validation |
-| Testing | Vitest | Scoring, OCR, grid-path, image, and storage tests |
+| Testing | Vitest, Playwright CLI | Unit coverage plus independent multi-phone browser flows |
 | Styling | Handwritten CSS, Lucide icons, Fontsource | Responsive vibrant-pastel interface |
 
 ## Game scoring
@@ -55,13 +58,13 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 
 ## Multiplayer round flow
 
-1. The host chooses the game mode, player count, board size, and timer.
+1. The host chooses the game mode, player count, board size, and timer. Word Factory rooms also choose a generated or physical board.
 2. Players join with the room code and choose their display name.
-3. For Boggle/Scribbage, the host photographs or manually enters the letter grid and confirms every tile.
-4. Everyone plays on paper while the shared round timer runs.
-5. Each player photographs their answers, crops the page, reviews the OCR result, and submits from their phone.
-6. Answer lists remain private until the host closes the round.
-7. Wordwell validates every word, crosses out matches, and calculates the round scores.
+3. In a generated Word Factory round, Wordwell rolls a balanced dice-style grid and opens it on every phone after a synchronized three-second countdown.
+4. Players type into private, automatically saved lists. The board and entry field lock globally while paused and immediately at the server-calculated deadline.
+5. At zero, the host client automatically freezes submissions, validates the lists with SOWPODS and adjacent-tile paths, and publishes the reveal. A reconnecting host resumes interrupted processing.
+6. In a physical Boggle or Word Factory round, the host instead photographs or manually enters the grid; players scan, crop, review, and submit their handwritten answers after play.
+7. Wordwell crosses out same-player and cross-player duplicates, scores valid answers, and carries finalized totals into the next host-controlled round.
 
 Photos are processed locally and are not uploaded to Supabase. The temporary image is removed after local OCR finishes; reviewed drafts can remain on the phone so a lost connection does not erase a player's work.
 
@@ -119,8 +122,8 @@ npm run preview  # Preview the production build locally
 
 ```text
 src/
-  components/          Camera capture, board editing, and answer review
-  lib/                 Scoring, grid validation, OCR, storage, and room APIs
+  components/          Generated play, camera capture, board editing, and answer review
+  lib/                 Board generation, scoring, grid validation, OCR, storage, and room APIs
   App.tsx              Multiplayer flows and application UI
 public/                PWA icons
 supabase/migrations/   PostgreSQL schema, RLS policies, and room RPCs
@@ -134,6 +137,7 @@ The service worker precaches the application, SOWPODS bundle, fonts, Tesseract w
 The project includes tests for:
 
 - Boggle and Scribbage scoring rules
+- Balanced deterministic 4×4 and 5×5 generated boards, including `QU`
 - Duplicate cancellation and round evaluation
 - Grid-path validation
 - Board-image splitting

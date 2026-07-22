@@ -5,6 +5,7 @@ import {
 } from '@supabase/supabase-js'
 
 export type RoomMode = 'scrabble' | 'boggle' | 'scribbage'
+export type BoardSource = 'physical' | 'generated'
 export type RoundPhase =
   | 'board_setup'
   | 'playing'
@@ -16,6 +17,7 @@ export type RoundPhase =
 export type RoomSession = {
   id: string
   mode: RoomMode
+  boardSource: BoardSource
   playerLimit: number
   lobbyLocked: boolean
   status: 'active' | 'complete'
@@ -126,6 +128,7 @@ export type RoomState = {
 
 export type CreateRoomOptions = {
   mode: RoomMode
+  boardSource?: BoardSource
   playerLimit: number
   hostPlayerName?: string | null
   gridSize?: 4 | 5
@@ -237,6 +240,7 @@ function mapSession(value: unknown): RoomSession {
   return {
     id: stringValue(row, 'id'),
     mode: stringValue(row, 'mode') as RoomMode,
+    boardSource: stringValue(row, 'board_source') as BoardSource,
     playerLimit: numberValue(row, 'player_limit'),
     lobbyLocked: booleanValue(row, 'lobby_locked'),
     status: stringValue(row, 'status') as RoomSession['status'],
@@ -375,12 +379,13 @@ export async function ensureRoomAuth(): Promise<string | null> {
 }
 
 export async function createRoom(options: CreateRoomOptions): Promise<RoomJoin | null> {
-  const data = await rpc<unknown>('create_room', {
+  const data = await rpc<unknown>('create_room_v2', {
     p_mode: options.mode,
     p_player_limit: options.playerLimit,
     p_host_player_name: options.hostPlayerName?.trim() || null,
     p_grid_size: options.gridSize ?? 4,
     p_timer_seconds: options.timerSeconds ?? 180,
+    p_board_source: options.mode === 'scribbage' ? options.boardSource ?? 'generated' : 'physical',
   })
   if (!data) return null
   const result = asRecord(data)
@@ -412,7 +417,7 @@ export async function fetchRoomState(sessionId: string): Promise<RoomState | nul
   await ensureRoomAuth()
   const sessionQuery = roomsClient
     .from('game_sessions')
-    .select('id,mode,player_limit,lobby_locked,status,created_at,updated_at,finished_at')
+    .select('id,mode,board_source,player_limit,lobby_locked,status,created_at,updated_at,finished_at')
     .eq('id', sessionId)
     .single()
   const membersQuery = roomsClient.from('game_members').select('*').eq('session_id', sessionId).is('removed_at', null).order('sort_order')
@@ -476,6 +481,8 @@ export const confirmRoundBoard = (roundId: string, grid: string[][]) =>
   rpc<unknown>('confirm_board', { p_round_id: roundId, p_grid: grid }).then((row) => (row ? mapRound(row) : null))
 export const startRoomRound = (roundId: string) =>
   rpc<unknown>('start_round', { p_round_id: roundId }).then((row) => (row ? mapRound(row) : null))
+export const startGeneratedRound = (roundId: string, grid: string[][]) =>
+  rpc<unknown>('start_generated_round', { p_round_id: roundId, p_grid: grid }).then((row) => (row ? mapRound(row) : null))
 export const pauseRoomRound = (roundId: string) =>
   rpc<unknown>('pause_round', { p_round_id: roundId }).then((row) => (row ? mapRound(row) : null))
 export const resumeRoomRound = (roundId: string) =>
@@ -511,6 +518,13 @@ export function confirmRoundSubmission(
 
 export async function closeRoomRound(roundId: string): Promise<{ roundId: string; frozenRevision: string } | null> {
   const data = await rpc<unknown>('close_round', { p_round_id: roundId })
+  if (!data) return null
+  const result = asRecord(data)
+  return { roundId: stringValue(result, 'roundId'), frozenRevision: stringValue(result, 'frozenRevision') }
+}
+
+export async function expireGeneratedRound(roundId: string): Promise<{ roundId: string; frozenRevision: string } | null> {
+  const data = await rpc<unknown>('expire_generated_round', { p_round_id: roundId })
   if (!data) return null
   const result = asRecord(data)
   return { roundId: stringValue(result, 'roundId'), frozenRevision: stringValue(result, 'frozenRevision') }
