@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.env.local
+*.tsbuildinfo
+.DS_Store
+.playwright-cli/
+supabase/.temp/
+security_best_practices_report.md
