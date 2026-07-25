@@ -1,15 +1,36 @@
-# Wordwell
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-6d5bd0.svg)](LICENSE)
-[![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
-[![PWA](https://img.shields.io/badge/PWA-offline--ready-f6bd60.svg)](https://web.dev/progressive-web-apps/)
-
-> An offline-first multiplayer scorekeeper, word validator, and online Word Factory game for Scrabble, Boggle, and Scribbage.
+<div align="center">
+  <img src="public/icon.svg" width="96" height="96" alt="Wordwell app icon">
+  <h1>Wordwell</h1>
+  <p><strong>An offline-first multiplayer companion for Scrabble, Boggle, Scribbage, and Word Factory.</strong></p>
+  <p>
+    <a href="https://github.com/ostenmatrixx/wordwell"><img src="https://img.shields.io/github/package-json/v/ostenmatrixx/wordwell?style=flat-square&color=f97360" alt="Version"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/ostenmatrixx/wordwell?style=flat-square&color=6d5bd0" alt="MIT License"></a>
+    <a href="https://github.com/ostenmatrixx/wordwell/commits/main"><img src="https://img.shields.io/github/last-commit/ostenmatrixx/wordwell/main?style=flat-square&color=4f9d87" alt="Last commit"></a>
+    <a href="https://github.com/ostenmatrixx/wordwell/issues"><img src="https://img.shields.io/github/issues/ostenmatrixx/wordwell?style=flat-square&color=f6bd60" alt="Open issues"></a>
+  </p>
+  <p>
+    <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-20232a?style=flat-square&logo=react&logoColor=61dafb" alt="React 19"></a>
+    <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.8-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.8"></a>
+    <a href="https://vite.dev/"><img src="https://img.shields.io/badge/Vite-7-646cff?style=flat-square&logo=vite&logoColor=white" alt="Vite 7"></a>
+    <a href="https://supabase.com/"><img src="https://img.shields.io/badge/Supabase-Realtime-3fcf8e?style=flat-square&logo=supabase&logoColor=white" alt="Supabase Realtime"></a>
+    <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-Database-4169e1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
+    <a href="https://tesseract.projectnaptha.com/"><img src="https://img.shields.io/badge/Tesseract.js-OCR-5c6ac4?style=flat-square" alt="Tesseract.js OCR"></a>
+    <a href="https://developer.mozilla.org/docs/Web/API/IndexedDB_API"><img src="https://img.shields.io/badge/IndexedDB-Offline_storage-f6bd60?style=flat-square" alt="IndexedDB offline storage"></a>
+    <a href="https://developer.chrome.com/docs/workbox/"><img src="https://img.shields.io/badge/Workbox-Service_worker-4285f4?style=flat-square&logo=googlechrome&logoColor=white" alt="Workbox service worker"></a>
+    <a href="https://vitest.dev/"><img src="https://img.shields.io/badge/Vitest-Testing-6e9f18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest"></a>
+    <a href="https://web.dev/progressive-web-apps/"><img src="https://img.shields.io/badge/PWA-offline--ready-f97360?style=flat-square&logo=pwa&logoColor=white" alt="Offline-ready PWA"></a>
+  </p>
+  <p>
+    <a href="#features">Features</a> ·
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#supabase-setup">Supabase setup</a> ·
+    <a href="#contributing">Contributing</a>
+  </p>
+</div>
 
 ## About Wordwell
 
-Wordwell replaces the shared paper score sheet without replacing the physical word game—and can now become the Word Factory board itself. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
+Wordwell replaces the shared paper score sheet without replacing the physical word game—and it can become the Word Factory board itself. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
 
 Wordwell is a progressive web app built with React, TypeScript, Vite, and Supabase. Its camera and OCR workflow runs on the player's device, while PostgreSQL and Realtime keep multiplayer rooms synchronized.
 
@@ -68,19 +89,22 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 
 Photos are processed locally and are not uploaded to Supabase. The temporary image is removed after local OCR finishes; reviewed drafts can remain on the phone so a lost connection does not erase a player's work.
 
-## Getting started
+## Quick start
 
-Requirements: a current Node.js LTS release, npm, and a Supabase project for multiplayer features.
+Requirements: a current Node.js LTS release and npm. A Supabase project is only required for multiplayer rooms.
 
 ```bash
 git clone https://github.com/ostenmatrixx/wordwell.git
 cd wordwell
 npm ci
-cp .env.example .env.local
 npm run dev
 ```
 
-Open the local URL printed by Vite. Dictionary checking, camera review, OCR, and draft storage run locally. Creating or joining a room additionally requires the Supabase configuration below.
+Open the local URL printed by Vite. Dictionary checking, camera review, OCR, and draft storage work without a backend. To create or join multiplayer rooms, copy the environment template and complete the Supabase setup below:
+
+```bash
+cp .env.example .env.local
+```
 
 ## Supabase setup
 
@@ -111,12 +135,12 @@ Use `npm run build` as the build command and `dist` as the output directory. Nev
 
 ## Commands
 
-```bash
-npm run dev      # Start the Vite development server
-npm test         # Run the unit test suite once
-npm run build    # Type-check and create the production PWA
-npm run preview  # Preview the production build locally
-```
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm test` | Run the Vitest suite once |
+| `npm run build` | Type-check and create the production PWA |
+| `npm run preview` | Preview the production build locally |
 
 ## Project structure
 
