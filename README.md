@@ -21,14 +21,15 @@
     <a href="https://web.dev/progressive-web-apps/"><img src="https://img.shields.io/badge/PWA-offline--ready-f97360?style=flat-square&logo=pwa&logoColor=white" alt="Offline-ready PWA"></a>
   </p>
   <p>
-    <a href="#features">Features</a> ·
-    <a href="#quick-start">Quick start</a> ·
-    <a href="#supabase-setup">Supabase setup</a> ·
-    <a href="#contributing">Contributing</a>
+    <a href="#what-it-does">What it does</a> ·
+    <a href="#production-engineering">Production engineering</a> ·
+    <a href="#tech-stack">Tech stack</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#local-development">Local Development</a>
   </p>
 </div>
 
-## About Wordwell
+## What it does
 
 Wordwell replaces the shared paper score sheet without replacing the physical word game—and it can become the Word Factory board itself. Create a room, let every player join from their own phone, and collect answers in parallel instead of passing one device around the table.
 
@@ -51,6 +52,18 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 - Live roster, readiness, timer, reveal, score ledger, and scoreboard updates
 - Scrabble dictionary checking with manual board-score entry
 
+## Production engineering
+
+Wordwell is an open-source MVP built with production-oriented boundaries and failure recovery:
+
+- **Server-authoritative multiplayer:** PostgreSQL RPCs control room mutations, round transitions, deadlines, submission revisions, and score publication.
+- **Offline resilience:** Workbox precaches the application, dictionary, fonts, and OCR runtime, while IndexedDB preserves in-progress drafts across refreshes and temporary connection loss.
+- **Safe recovery:** Late and stale submissions are rejected, interrupted host processing can resume after reconnecting, and local drafts remain recoverable until synchronization succeeds.
+- **Privacy by design:** Camera images and Tesseract.js processing remain on the player's device; photos are never uploaded to Supabase.
+- **Database security:** Anonymous players receive temporary Supabase identities, and row-level security protects data accessed through the browser's public publishable key.
+- **Repeatable validation:** Deterministic unit tests cover scoring, generated boards, path validation, duplicate handling, OCR normalization, and offline storage.
+- **Portable deployment:** The frontend builds to static assets and receives environment-specific Supabase configuration at build time, with no server secrets bundled into the client.
+
 ## Tech stack
 
 | Area | Technology | Role in Wordwell |
@@ -66,6 +79,54 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 | Dictionary | `sowpods` | Bundled offline word validation |
 | Testing | Vitest, Playwright CLI | Unit coverage plus independent multi-phone browser flows |
 | Styling | Handwritten CSS, Lucide icons, Fontsource | Responsive vibrant-pastel interface |
+
+## Architecture
+
+Wordwell has no custom application server. The Vite PWA runs on each player's device, and Supabase provides authentication, transactional PostgreSQL RPCs, persistence, and Realtime updates.
+
+```mermaid
+flowchart LR
+  subgraph Device["Player device"]
+    UI["React PWA"]
+    OCR["Camera + Tesseract.js"]
+    Dictionary["SOWPODS dictionary"]
+    Drafts[("IndexedDB drafts")]
+    Cache["Workbox cache"]
+  end
+
+  subgraph Supabase["Supabase backend"]
+    Auth["Anonymous Auth"]
+    RPC["PostgreSQL RPCs"]
+    DB[("PostgreSQL")]
+    Realtime["Realtime"]
+  end
+
+  Cache --> UI
+  OCR --> UI
+  Dictionary --> UI
+  UI <--> Drafts
+  UI --> Auth
+  UI --> RPC
+  RPC --> DB
+  DB --> Realtime
+  Realtime --> UI
+```
+
+The client owns presentation, camera capture, OCR, draft persistence, and offline dictionary checks. PostgreSQL owns shared room state, authoritative deadlines, revisions, results, and score history. Realtime publishes database changes back to every connected player. The camera and OCR path ends inside the device boundary.
+
+### Project structure
+
+```text
+src/
+  components/          Generated play, camera capture, board editing, and answer review
+  lib/                 Board generation, scoring, grid validation, OCR, storage, and room APIs
+  App.tsx              Multiplayer flows and application UI
+public/                PWA icons
+supabase/migrations/   PostgreSQL schema, RLS policies, and room RPCs
+vite.config.ts         Vite build and PWA precache configuration
+```
+
+The service worker precaches the application, SOWPODS bundle, fonts, Tesseract worker, WASM cores, and English OCR model. Supabase API responses and player photos are not added to the runtime cache.
 
 ## Game scoring
 
@@ -89,7 +150,7 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 
 Photos are processed locally and are not uploaded to Supabase. The temporary image is removed after local OCR finishes; reviewed drafts can remain on the phone so a lost connection does not erase a player's work.
 
-## Quick start
+## Local Development
 
 Requirements: a current Node.js LTS release and npm. A Supabase project is only required for multiplayer rooms.
 
@@ -106,7 +167,7 @@ Open the local URL printed by Vite. Dictionary checking, camera review, OCR, and
 cp .env.example .env.local
 ```
 
-## Supabase setup
+### Supabase setup
 
 1. Create a Supabase project.
 2. Enable **Anonymous Sign-Ins** under Authentication → Providers → Anonymous.
@@ -122,6 +183,15 @@ Only the public Supabase URL and publishable key belong in `VITE_*` variables. N
 
 Before a public production launch, configure CAPTCHA/Turnstile for anonymous sign-in, rate limits and data-retention cleanup, private Realtime channels, and deployment security headers.
 
+### Commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm test` | Run the Vitest suite once |
+| `npm run build` | Type-check and create the production PWA |
+| `npm run preview` | Preview the production build locally |
+
 ## Production deployment
 
 Wordwell is a static Vite application and can be hosted on Vercel, Netlify, Cloudflare Pages, or another static host. Configure these build-time variables in the hosting provider for both preview and production environments:
@@ -132,29 +202,6 @@ VITE_SUPABASE_ANON_KEY=your-publishable-key
 ```
 
 Use `npm run build` as the build command and `dist` as the output directory. Never commit `.env.local`; it is intentionally ignored by Git.
-
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start the Vite development server |
-| `npm test` | Run the Vitest suite once |
-| `npm run build` | Type-check and create the production PWA |
-| `npm run preview` | Preview the production build locally |
-
-## Project structure
-
-```text
-src/
-  components/          Generated play, camera capture, board editing, and answer review
-  lib/                 Board generation, scoring, grid validation, OCR, storage, and room APIs
-  App.tsx              Multiplayer flows and application UI
-public/                PWA icons
-supabase/migrations/   PostgreSQL schema, RLS policies, and room RPCs
-vite.config.ts         Vite build and PWA precache configuration
-```
-
-The service worker precaches the application, SOWPODS bundle, fonts, Tesseract worker, WASM cores, and English OCR model. Supabase API responses and player photos are not added to the runtime cache.
 
 ## Validation
 
