@@ -19,8 +19,16 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCw,
   Trash2,
 } from 'lucide-react'
+import {
+  boardRotationAnnouncement,
+  boardRotationDegrees,
+  nextBoardQuarterTurn,
+  rotatedBoardCells,
+  type BoardQuarterTurn,
+} from '../lib/board-rotation'
 import {
   boardTraceWord,
   extendBoardTrace,
@@ -115,11 +123,14 @@ export function OnlineWordEntry({
   const [entryViewport, setEntryViewport] = useState<EntryViewport | null>(null)
   const [tracePath, setTracePath] = useState<number[]>([])
   const [traceNotice, setTraceNotice] = useState<TraceNotice | null>(null)
+  const [boardRotation, setBoardRotation] = useState<BoardQuarterTurn>(0)
+  const [rotationAnnouncement, setRotationAnnouncement] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const boardRef = useRef<HTMLDivElement>(null)
   const scrollPositionRef = useRef(0)
   const restoreBodyRef = useRef<(() => void) | null>(null)
   const addPointerHandledRef = useRef(false)
+  const rotatePointerHandledRef = useRef(false)
   const tracePathRef = useRef<number[]>([])
   const tracePointerRef = useRef<number | null>(null)
   const traceNoticeTimerRef = useRef<number | null>(null)
@@ -128,6 +139,8 @@ export function OnlineWordEntry({
   const active = countdown <= 0 && !paused && !ended
   const status = syncCopy(ended ? 'locked' : syncState)
   const tracedWord = boardTraceWord(round.grid, tracePath)
+  const displayedBoardCells = rotatedBoardCells(round.grid, boardRotation)
+  const rotationDegrees = boardRotationDegrees(boardRotation)
   const entryStyle = entryFocused && entryViewport ? {
     '--online-visual-height': `${entryViewport.height}px`,
     '--online-visual-left': `${entryViewport.offsetLeft}px`,
@@ -226,6 +239,11 @@ export function OnlineWordEntry({
     clearTraceNotice()
   }, [round.id, active, isPlayer])
 
+  useEffect(() => {
+    setBoardRotation(0)
+    setRotationAnnouncement('')
+  }, [round.id])
+
   useEffect(() => () => {
     if (traceNoticeTimerRef.current !== null) window.clearTimeout(traceNoticeTimerRef.current)
   }, [])
@@ -323,6 +341,29 @@ export function OnlineWordEntry({
     cancelBoardTrace()
   }
 
+  function rotateBoard() {
+    if (!active) return
+
+    cancelBoardTrace()
+    clearTraceNotice()
+    const nextRotation = nextBoardQuarterTurn(boardRotation)
+    setBoardRotation(nextRotation)
+    setRotationAnnouncement(boardRotationAnnouncement(nextRotation))
+    if (entryFocused) {
+      window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
+    }
+  }
+
+  function handleRotatePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!entryFocused || !active || event.button !== 0) return
+
+    // Rotate before the button can take focus so an open mobile keyboard and
+    // the player's partially typed word remain exactly where they are.
+    event.preventDefault()
+    rotatePointerHandledRef.current = true
+    rotateBoard()
+  }
+
   function openEntryMode() {
     if (!active || !isMobileEntryViewport()) return
     if (!entryFocused) {
@@ -405,39 +446,61 @@ export function OnlineWordEntry({
       </div>
 
       <div className={`online-board-wrap${active && isPlayer ? ' can-trace' : ''}`}>
-        {active && isPlayer && (
-          <div className={`board-trace-readout${tracedWord ? ' is-tracing' : traceNotice ? ` is-${traceNotice.kind}` : ''}`} aria-live="polite">
-            <small>{tracedWord ? 'Tracing' : traceNotice?.kind === 'added' ? 'Added' : traceNotice?.kind === 'short' ? 'Try again' : 'Swipe to submit'}</small>
-            <strong>{tracedWord || (traceNotice?.kind === 'added' ? `${traceNotice.word} added` : traceNotice?.kind === 'short' ? '4 letters minimum' : 'Trace adjacent cubes')}</strong>
-          </div>
-        )}
+        <div className="board-tools">
+          {active && isPlayer && (
+            <div className={`board-trace-readout${tracedWord ? ' is-tracing' : traceNotice ? ` is-${traceNotice.kind}` : ''}`} aria-live="polite">
+              <small>{tracedWord ? 'Tracing' : traceNotice?.kind === 'added' ? 'Added' : traceNotice?.kind === 'short' ? 'Try again' : 'Swipe to submit'}</small>
+              <strong>{tracedWord || (traceNotice?.kind === 'added' ? `${traceNotice.word} added` : traceNotice?.kind === 'short' ? '4 letters minimum' : 'Trace adjacent cubes')}</strong>
+            </div>
+          )}
+          <button
+            className="board-rotate-button"
+            type="button"
+            disabled={!active}
+            aria-label={`Rotate board 90 degrees clockwise. Current orientation ${rotationDegrees} degrees.`}
+            onPointerDown={handleRotatePointerDown}
+            onPointerCancel={() => { rotatePointerHandledRef.current = false }}
+            onClick={(event) => {
+              if (rotatePointerHandledRef.current) {
+                rotatePointerHandledRef.current = false
+                event.preventDefault()
+                return
+              }
+              rotateBoard()
+            }}
+          >
+            <RotateCw />
+            <span>Rotate board</span>
+            <small aria-hidden="true">{rotationDegrees}°</small>
+          </button>
+          <span className="sr-only" aria-live="polite">{rotationAnnouncement}</span>
+        </div>
         <div className="online-board-stage">
           <div
             ref={boardRef}
             className={`shared-board online-shared-board size-${round.gridSize}${active ? '' : ' is-covered'}${tracePath.length ? ' is-tracing' : ''}`}
             aria-describedby="online-board-instructions"
-            aria-label={`${round.gridSize} by ${round.gridSize} rumbled letter-cube board. Swipe across adjacent cubes and release to submit a word.`}
+            aria-label={`${round.gridSize} by ${round.gridSize} rumbled letter-cube board at ${rotationDegrees} degrees. Swipe across adjacent cubes and release to submit a word.`}
             onPointerDown={handleBoardPointerDown}
             onPointerMove={handleBoardPointerMove}
             onPointerUp={handleBoardPointerUp}
             onPointerCancel={handleBoardPointerCancel}
             onLostPointerCapture={handleBoardPointerCancel}
           >
-            {round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => {
-              const tileIndex = rowIndex * round.gridSize + columnIndex
-              const traceOrder = tracePath.indexOf(tileIndex)
+            {displayedBoardCells.map((cell) => {
+              const traceOrder = tracePath.indexOf(cell.sourceIndex)
               return (
                 <span
-                  key={`${rowIndex}-${columnIndex}`}
+                  key={cell.sourceIndex}
                   className={traceOrder >= 0 ? 'is-traced' : undefined}
-                  data-board-index={tileIndex}
+                  data-board-index={cell.sourceIndex}
                 >
-                  {cell}
+                  {cell.value}
                   {traceOrder >= 0 && <i className="board-trace-order" aria-hidden="true">{traceOrder + 1}</i>}
-                  <small>{tileIndex + 1}</small>
+                  <small>{cell.sourceIndex + 1}</small>
                 </span>
               )
-            }))}
+            })}
           </div>
           {!active && (
             <div className={`board-state-cover ${countdown > 0 ? 'countdown' : ''}`} role="status">
