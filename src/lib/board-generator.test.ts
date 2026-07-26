@@ -71,10 +71,10 @@ describe('rumbled Word Factory boards', () => {
   it('uses the fixed 25-cube physical-style inventory for a 5 by 5 rumble', () => {
     expect(getWordFactoryCubes(5).map((cube) => cube.map((face) => face === 'QU' ? 'Q' : face).join(''))).toEqual([
       'AAAFRS', 'AAEEEE', 'AAFIRS', 'ADENNN', 'AEEEEM',
-      'AEEGMU', 'AEGMNN', 'AFIRSY', 'BJKQXZ', 'CCENST',
-      'CEIILT', 'CEILPT', 'CEIPST', 'DDHNOT', 'DHHLOR',
-      'DHLNOR', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
-      'FIPRSY', 'GORRVW', 'IPRRRY', 'NOOTUW', 'OOOTTU',
+      'AEEGMU', 'AEGMNN', 'AFIRSY', 'BJKQXZ', 'CCNSTW',
+      'CEIILT', 'CEILPT', 'CEIPST', 'DDLNOR', 'DDHNOT',
+      'DHHLOR', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
+      'FIPRSY', 'GORRVW', 'HIPRRY', 'NOOTUW', 'OOOTTU',
     ])
   })
 

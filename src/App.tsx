@@ -861,6 +861,58 @@ function App() {
     await roomAction(() => finishRoomGame(roomState.session.id))
   }
 
+  async function startAnotherGame() {
+    if (!roomState || !me?.isHost) return
+    if (!isOnline) {
+      setToast('Reconnect before starting another game.')
+      return
+    }
+
+    const latestRound = roomState.rounds.at(-1)
+    const rematchGridSize = latestRound?.gridSize
+      ?? (roomState.session.mode === 'scribbage' && roomState.session.boardSource === 'generated' ? 5 : 4)
+    const rematchTimerSeconds = latestRound?.timerDurationSeconds ?? 180
+
+    setBusy(true)
+    try {
+      await ensureRoomAuth()
+      const joined = await createRoom({
+        mode: roomState.session.mode,
+        boardSource: roomState.session.boardSource,
+        playerLimit: roomState.session.playerLimit,
+        hostPlayerName: me.isPlayer ? me.displayName : null,
+        gridSize: rematchGridSize,
+        timerSeconds: rematchTimerSeconds,
+      })
+      if (!joined) throw new Error('Could not create the rematch room.')
+
+      const stored = { ...joined, roomCode: joined.roomCode }
+      saveStoredRoom(stored)
+      setRoomState(null)
+      setActiveRoom(stored)
+      setAnswerRows([])
+      setSubmissionMode('draft')
+      setQueuedSubmission(null)
+      setOnlineWords([])
+      onlineWordsRef.current = []
+      onlineScopeRef.current = null
+      setOnlineSyncState('not-submitted')
+      setScrabbleWord('')
+      setScrabblePoints('')
+      setScrabbleInvalidNotice(null)
+      setScrabbleDefinition(null)
+      setDefinitionLoading(false)
+      setGridSize(rematchGridSize)
+      setBoardCells(Array(rematchGridSize * rematchGridSize).fill(''))
+      setBoardReviewCells(Array(rematchGridSize * rematchGridSize).fill(false))
+      setToast(`Rematch room ${joined.roomCode} is ready. Share the new code with the players.`)
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (!isOnline || submissionMode !== 'queued' || !queuedSubmission || currentRound?.phase !== 'collecting') return
     void submitAnswers()
@@ -970,7 +1022,13 @@ function App() {
             <div className="room-layout">
               <div className="round-column">
                 {roomState.session.status === 'complete' ? (
-                  <FinalLeaderboard room={roomState} />
+                  <FinalLeaderboard
+                    room={roomState}
+                    isHost={isHost}
+                    busy={busy}
+                    onAnotherGame={startAnotherGame}
+                    onReturnHome={leaveRoom}
+                  />
                 ) : (
                   <>
                 {!roomState.session.lobbyLocked && roomState.session.mode === 'scrabble' && (
@@ -1368,7 +1426,19 @@ function ScrabblePanel(props: ScrabblePanelProps) {
   )
 }
 
-function FinalLeaderboard({ room }: { room: RoomState }) {
+function FinalLeaderboard({
+  room,
+  isHost,
+  busy,
+  onAnotherGame,
+  onReturnHome,
+}: {
+  room: RoomState
+  isHost: boolean
+  busy: boolean
+  onAnotherGame: () => void
+  onReturnHome: () => void
+}) {
   const summary = buildGameSummary(room)
   const podium = summary.filter((player) => player.rank <= 3)
   const winners = summary.filter((player) => player.rank === 1)
@@ -1447,6 +1517,18 @@ function FinalLeaderboard({ room }: { room: RoomState }) {
           </div>
         </div>
       )}
+
+      <div className="final-actions">
+        <div>
+          <p className="section-kicker">Ready for a rematch?</p>
+          <h3>Same setup, fresh scoreboard.</h3>
+          <p>{isHost ? 'A new room keeps this result safe and gives you a fresh code to share.' : 'The host can open a fresh room and share the new code with everyone.'}</p>
+        </div>
+        <div>
+          {isHost && <button className="primary-button" type="button" onClick={onAnotherGame} disabled={busy}><RotateCcw size={18} /> Another game</button>}
+          <button className="secondary-button" type="button" onClick={onReturnHome} disabled={busy}><ArrowLeft size={18} /> Return home</button>
+        </div>
+      </div>
     </section>
   )
 }
