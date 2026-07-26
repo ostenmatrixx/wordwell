@@ -65,7 +65,7 @@ import {
 import { splitBoardImageIntoCells } from './lib/grid'
 import { evaluateGridRound } from './lib/round-engine'
 import { lookupWordDefinition, type WordDefinition } from './lib/definitions'
-import { buildGameSummary } from './lib/game-summary'
+import { buildGameSummary, buildRoundScoreSummary } from './lib/game-summary'
 import {
   applyWordOverride,
   checkScrabbleTurn,
@@ -1275,11 +1275,121 @@ function WaitingPanel({ icon, title, copy, action }: { icon: ReactNode; title: s
 }
 
 function RevealPanel({ room, round, isHost, onOverride, onFinalize }: { room: RoomState; round: GameRound; isHost: boolean; onOverride: (result: RoundWordResult, check: 'dictionary' | 'grid_path') => void; onFinalize: () => void }) {
-  return <section className="play-card reveal-card"><div className="card-heading"><div><p className="section-kicker">Round {round.roundNumber} reveal</p><h2><Eye size={22} /> The lists are open</h2><p>Exact matches are crossed out for every player and score zero.</p></div><span className="status-chip ready">Revealed</span></div><div className="reveal-columns">{room.members.filter((member) => member.isPlayer).map((member, index) => { const submission = room.submissions.find((item) => item.roundId === round.id && item.memberId === member.id); const words = room.words.filter((word) => word.submissionId === submission?.id); return <article key={member.id}><header><span className={`player-swatch ${PLAYER_COLORS[index % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0)}</span><div><h3>{member.displayName}</h3><small>{words.reduce((sum, word) => sum + (room.results.find((result) => result.wordId === word.id)?.score ?? 0), 0)} points</small></div></header>{words.length === 0 ? <p className="empty-list">No submitted words</p> : <ul>{words.map((word) => { const result = room.results.find((item) => item.wordId === word.id); if (!result) return null; const invalid = !result.eligible; return <li className={invalid ? 'crossed' : 'accepted'} key={word.id}><span><strong>{word.normalized}</strong><small>{resultReason(result)}</small></span><b>{result.score ? `+${result.score}` : '0'}</b>{isHost && !result.dictionaryValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'dictionary')}>Accept dictionary</button>}{isHost && !result.gridValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'grid_path')}>Accept path</button>}</li>})}</ul>}</article> })}</div>{isHost ? <button className="primary-button full-button" type="button" onClick={onFinalize}><Trophy size={18} /> Finalize round scores</button> : <p className="waiting-copy">Waiting for the host to finalize this round.</p>}</section>
+  const players = room.members.filter((member) => member.isPlayer && !member.removedAt)
+  const roundScores = buildRoundScoreSummary(room, round.id)
+  const pointsByMember = new Map(
+    roundScores.map((player) => [player.memberId, player.pointsAdded]),
+  )
+  const playerIndex = new Map(players.map((player, index) => [player.id, index]))
+
+  return (
+    <section className="play-card reveal-card">
+      <div className="card-heading">
+        <div>
+          <p className="section-kicker">Round {round.roundNumber} reveal</p>
+          <h2><Eye size={22} /> The lists are open</h2>
+          <p>Exact matches are crossed out for every player and score zero. Scores update as checks are accepted.</p>
+        </div>
+        <span className="status-chip ready">Checking</span>
+      </div>
+
+      <div className="reveal-score-strip" aria-label={`Current scores for round ${round.roundNumber}`}>
+        {roundScores.map((player) => (
+          <div key={player.memberId}>
+            <span className={`player-swatch ${PLAYER_COLORS[(playerIndex.get(player.memberId) ?? 0) % PLAYER_COLORS.length]}`}>
+              {player.displayName.charAt(0)}
+            </span>
+            <span>
+              <strong>{player.displayName}</strong>
+              <small>Current round score</small>
+            </span>
+            <b>{player.pointsAdded}<small> pts</small></b>
+          </div>
+        ))}
+      </div>
+
+      <div className="reveal-columns">
+        {players.map((member) => {
+          const submission = room.submissions.find((item) => item.roundId === round.id && item.memberId === member.id)
+          const words = room.words.filter((word) => word.submissionId === submission?.id)
+          return (
+            <article key={member.id}>
+              <header>
+                <span className={`player-swatch ${PLAYER_COLORS[(playerIndex.get(member.id) ?? 0) % PLAYER_COLORS.length]}`}>{member.displayName.charAt(0)}</span>
+                <div>
+                  <h3>{member.displayName}</h3>
+                  <small>{words.length} submitted {words.length === 1 ? 'word' : 'words'}</small>
+                </div>
+                <b className="reveal-player-total">+{pointsByMember.get(member.id) ?? 0}<small> pts</small></b>
+              </header>
+              {words.length === 0 ? <p className="empty-list">No submitted words</p> : (
+                <ul>
+                  {words.map((word) => {
+                    const result = room.results.find((item) => item.wordId === word.id)
+                    if (!result) return null
+                    const invalid = !result.eligible
+                    return (
+                      <li className={invalid ? 'crossed' : 'accepted'} key={word.id}>
+                        <span><strong>{word.normalized}</strong><small>{resultReason(result)}</small></span>
+                        <b>{result.score ? `+${result.score}` : '0'}</b>
+                        {isHost && !result.dictionaryValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'dictionary')}>Accept dictionary</button>}
+                        {isHost && !result.gridValid && !result.crossPlayerDuplicate && <button type="button" onClick={() => onOverride(result, 'grid_path')}>Accept path</button>}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </article>
+          )
+        })}
+      </div>
+
+      {isHost ? <button className="primary-button full-button" type="button" onClick={onFinalize}><Trophy size={18} /> Finalize round scores</button> : <p className="waiting-copy">Waiting for the host to finalize this round.</p>}
+    </section>
+  )
 }
 
 function RoundCompletePanel({ room, round, isHost, busy, onNext, onFinish }: { room: RoomState; round: GameRound; isHost: boolean; busy: boolean; onNext: () => void; onFinish: () => void }) {
-  return <section className="play-card round-complete"><span className="trophy-orbit"><Trophy size={38} /></span><p className="section-kicker">Round {round.roundNumber} complete</p><h2>Scores are locked in.</h2><p>{isHost ? 'Set up another board or finish the game and crown the winner.' : 'The host will decide whether there is another round.'}</p>{isHost && <div><button className="primary-button" type="button" onClick={onNext} disabled={busy}><Plus size={18} /> Next round</button><button className="secondary-button" type="button" onClick={onFinish} disabled={busy}><Flag size={17} /> Finish game</button></div>}{room.session.status === 'complete' && <p>Game complete.</p>}</section>
+  const roundScores = buildRoundScoreSummary(room, round.id)
+  const totalsByMember = new Map(
+    buildGameSummary(room).map((player) => [player.memberId, player.totalPoints]),
+  )
+  const playerIndex = new Map(
+    room.members.filter((member) => member.isPlayer && !member.removedAt).map((member, index) => [member.id, index]),
+  )
+
+  return (
+    <section className="play-card round-complete">
+      <span className="trophy-orbit"><Trophy size={38} /></span>
+      <p className="section-kicker">Round {round.roundNumber} complete</p>
+      <h2>Scores are locked in.</h2>
+
+      <div className="round-score-lock" aria-label={`Points added in round ${round.roundNumber}`}>
+        <header>
+          <span>Points added this round</span>
+          <small>Updated totals</small>
+        </header>
+        <ul>
+          {roundScores.map((player) => (
+            <li key={player.memberId}>
+              <span className={`player-swatch ${PLAYER_COLORS[(playerIndex.get(player.memberId) ?? 0) % PLAYER_COLORS.length]}`}>
+                {player.displayName.charAt(0)}
+              </span>
+              <span>
+                <strong>{player.displayName}</strong>
+                <small>{totalsByMember.get(player.memberId) ?? 0} points total</small>
+              </span>
+              <b>+{player.pointsAdded}<small> pts</small></b>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p>{isHost ? 'Set up another board or finish the game and crown the winner.' : 'The host will decide whether there is another round.'}</p>
+      {isHost && <div className="round-complete-actions"><button className="primary-button" type="button" onClick={onNext} disabled={busy}><Plus size={18} /> Next round</button><button className="secondary-button" type="button" onClick={onFinish} disabled={busy}><Flag size={17} /> Finish game</button></div>}
+      {room.session.status === 'complete' && <p>Game complete.</p>}
+    </section>
+  )
 }
 
 type ScrabblePanelProps = {
@@ -1448,16 +1558,9 @@ function FinalLeaderboard({
   const finalizedRounds = room.rounds.filter((round) => round.phase === 'finalized')
 
   const roundTotals = finalizedRounds.map((round) => {
-    const totals = new Map(room.members.filter((member) => member.isPlayer).map((member) => [member.id, 0]))
-    const wordsById = new Map(room.words.map((word) => [word.id, word]))
-    const submissionsById = new Map(room.submissions.map((submission) => [submission.id, submission]))
-    for (const result of room.results.filter((item) => item.roundId === round.id && item.eligible && item.score > 0)) {
-      const word = wordsById.get(result.wordId)
-      const submission = word ? submissionsById.get(word.submissionId) : null
-      if (submission && totals.has(submission.memberId)) {
-        totals.set(submission.memberId, (totals.get(submission.memberId) ?? 0) + result.score)
-      }
-    }
+    const totals = new Map(
+      buildRoundScoreSummary(room, round.id).map((player) => [player.memberId, player.pointsAdded]),
+    )
     return { round, totals }
   })
 

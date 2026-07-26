@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGameSummary } from './game-summary'
+import { buildGameSummary, buildRoundScoreSummary } from './game-summary'
 import type { RoomMember, RoomSession, RoomState } from './rooms'
 
 function session(mode: RoomSession['mode']): RoomSession {
@@ -113,6 +113,40 @@ describe('final game summary', () => {
     expect(buildGameSummary(room).slice(1).map(({ rank, totalPoints }) => ({ rank, totalPoints }))).toEqual([
       { rank: 2, totalPoints: 0 },
       { rank: 2, totalPoints: 0 },
+    ])
+  })
+})
+
+describe('locked round score summary', () => {
+  it('shows the points added for every active player in the selected round', () => {
+    const room = emptyRoom('scribbage')
+    room.submissions = [
+      { id: 's1', roundId: 'r1', memberId: 'a', clientToken: 't1', revision: 1, status: 'confirmed', confirmedAt: '1', updatedAt: '1' },
+      { id: 's2', roundId: 'r1', memberId: 'b', clientToken: 't2', revision: 1, status: 'confirmed', confirmedAt: '1', updatedAt: '1' },
+      { id: 's3', roundId: 'r2', memberId: 'c', clientToken: 't3', revision: 1, status: 'confirmed', confirmedAt: '1', updatedAt: '1' },
+    ]
+    room.words = [
+      { id: 'w1', submissionId: 's1', position: 0, rawText: 'WORD', normalized: 'WORD', confidence: null },
+      { id: 'w2', submissionId: 's1', position: 1, rawText: 'WORDS', normalized: 'WORDS', confidence: null },
+      { id: 'w3', submissionId: 's2', position: 0, rawText: 'TIED', normalized: 'TIED', confidence: null },
+      { id: 'w4', submissionId: 's3', position: 0, rawText: 'LATER', normalized: 'LATER', confidence: null },
+    ]
+    const result = (id: string, roundId: string, score: number, eligible = true) => ({
+      id: `result-${id}`, roundId, wordId: id, resultsRevision: 'revision',
+      formatValid: true, minimumLengthValid: true, dictionaryValid: true, gridValid: true,
+      selfDuplicate: false, crossPlayerDuplicate: !eligible, gridPath: null, baseScore: score, score, eligible,
+    })
+    room.results = [
+      result('w1', 'r1', 1),
+      result('w2', 'r1', 2),
+      result('w3', 'r1', 1, false),
+      result('w4', 'r2', 2),
+    ]
+
+    expect(buildRoundScoreSummary(room, 'r1')).toEqual([
+      { memberId: 'a', displayName: 'Ari', pointsAdded: 3 },
+      { memberId: 'b', displayName: 'Bea', pointsAdded: 0 },
+      { memberId: 'c', displayName: 'Cy', pointsAdded: 0 },
     ])
   })
 })
