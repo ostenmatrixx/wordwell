@@ -1202,7 +1202,7 @@ function Landing(props: LandingProps) {
       <section className="room-hero">
         <div>
           <p className="eyebrow"><Sparkles size={16} /> Multiplayer word nights</p>
-          <h1>Every phone.<br /><em>One table.</em></h1>
+          <h1>Find the words.<br /><em>Beat your friends.</em></h1>
         </div>
         <div className="hero-copy">
           <p>Scan handwritten answers, verify every word, and reveal duplicates together—without passing one phone around.</p>

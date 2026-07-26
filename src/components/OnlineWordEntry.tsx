@@ -24,6 +24,7 @@ import {
 import {
   boardTraceWord,
   extendBoardTrace,
+  isPointInBoardTileActivationZone,
   submitBoardTrace,
 } from '../lib/board-trace'
 import type { GameRound } from '../lib/rooms'
@@ -260,28 +261,29 @@ export function OnlineWordEntry({
     updateTracePath([])
   }
 
-  function tileIndexFromTarget(target: EventTarget | null) {
+  function boardTileFromTarget(target: EventTarget | null) {
     const element = target instanceof Element ? target : null
     const tile = element?.closest<HTMLElement>('[data-board-index]')
-    if (!tile || !boardRef.current?.contains(tile)) return null
+    return tile && boardRef.current?.contains(tile) ? tile : null
+  }
+
+  function tileIndexAtPoint(clientX: number, clientY: number) {
+    const tile = boardTileFromTarget(document.elementFromPoint(clientX, clientY))
+    if (!tile || !isPointInBoardTileActivationZone(clientX, clientY, tile.getBoundingClientRect())) return null
+
     const index = Number(tile.dataset.boardIndex)
     return Number.isInteger(index) ? index : null
   }
 
-  function tileIndexAtPoint(clientX: number, clientY: number) {
-    return tileIndexFromTarget(document.elementFromPoint(clientX, clientY))
-  }
-
   function handleBoardPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!active || !isPlayer || !event.isPrimary || event.button !== 0 || tracePointerRef.current !== null) return
-    const tileIndex = tileIndexFromTarget(event.target)
-    if (tileIndex === null) return
 
     event.preventDefault()
     clearTraceNotice()
     tracePointerRef.current = event.pointerId
     event.currentTarget.setPointerCapture(event.pointerId)
-    updateTracePath([tileIndex])
+    const tileIndex = tileIndexAtPoint(event.clientX, event.clientY)
+    updateTracePath(tileIndex === null ? [] : [tileIndex])
   }
 
   function handleBoardPointerMove(event: ReactPointerEvent<HTMLDivElement>) {

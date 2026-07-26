@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  BOARD_TRACE_ACTIVATION_RATIO,
   areBoardTilesAdjacent,
   boardTraceWord,
   extendBoardTrace,
+  isPointInBoardTileActivationZone,
   submitBoardTrace,
 } from './board-trace'
 
@@ -14,6 +16,30 @@ const board = [
 ]
 
 describe('board swipe tracing', () => {
+  it('uses the centered 60 percent of a tile as its activation zone', () => {
+    const bounds = { left: 10, top: 20, width: 100, height: 80 }
+    expect(BOARD_TRACE_ACTIVATION_RATIO).toBe(0.6)
+    expect(isPointInBoardTileActivationZone(60, 60, bounds)).toBe(true)
+    expect(isPointInBoardTileActivationZone(30, 36, bounds)).toBe(true)
+    expect(isPointInBoardTileActivationZone(90, 84, bounds)).toBe(true)
+  })
+
+  it('ignores the outer 20 percent on every edge of a tile', () => {
+    const bounds = { left: 10, top: 20, width: 100, height: 80 }
+    expect(isPointInBoardTileActivationZone(29.9, 60, bounds)).toBe(false)
+    expect(isPointInBoardTileActivationZone(90.1, 60, bounds)).toBe(false)
+    expect(isPointInBoardTileActivationZone(60, 35.9, bounds)).toBe(false)
+    expect(isPointInBoardTileActivationZone(60, 84.1, bounds)).toBe(false)
+  })
+
+  it('rejects invalid activation geometry and ratios', () => {
+    const bounds = { left: 0, top: 0, width: 100, height: 100 }
+    expect(isPointInBoardTileActivationZone(Number.NaN, 50, bounds)).toBe(false)
+    expect(isPointInBoardTileActivationZone(50, 50, { ...bounds, width: 0 })).toBe(false)
+    expect(isPointInBoardTileActivationZone(50, 50, bounds, 0)).toBe(false)
+    expect(isPointInBoardTileActivationZone(50, 50, bounds, 1.1)).toBe(false)
+  })
+
   it('allows all eight neighbouring directions', () => {
     const neighbours = [0, 1, 2, 4, 6, 8, 9, 10]
     expect(neighbours.every((index) => areBoardTilesAdjacent(5, index, 4))).toBe(true)

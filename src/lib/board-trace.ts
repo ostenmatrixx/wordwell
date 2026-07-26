@@ -3,8 +3,53 @@ export type BoardTraceSubmission =
   | { status: 'too-short'; word: string }
   | { status: 'submitted'; word: string }
 
+export type BoardTileBounds = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export const BOARD_TRACE_ACTIVATION_RATIO = 0.6
+
 function isBoardIndex(index: number, size: number) {
   return Number.isInteger(index) && index >= 0 && index < size * size
+}
+
+/**
+ * Keeps the outer edge of a tile neutral so a trace only changes after the
+ * pointer enters the tile's centered activation zone.
+ */
+export function isPointInBoardTileActivationZone(
+  clientX: number,
+  clientY: number,
+  bounds: BoardTileBounds,
+  activationRatio = BOARD_TRACE_ACTIVATION_RATIO,
+) {
+  if (
+    !Number.isFinite(clientX)
+    || !Number.isFinite(clientY)
+    || !Number.isFinite(bounds.left)
+    || !Number.isFinite(bounds.top)
+    || !Number.isFinite(bounds.width)
+    || !Number.isFinite(bounds.height)
+    || bounds.width <= 0
+    || bounds.height <= 0
+    || activationRatio <= 0
+    || activationRatio > 1
+  ) {
+    return false
+  }
+
+  const horizontalInset = bounds.width * (1 - activationRatio) / 2
+  const verticalInset = bounds.height * (1 - activationRatio) / 2
+
+  return (
+    clientX >= bounds.left + horizontalInset
+    && clientX <= bounds.left + bounds.width - horizontalInset
+    && clientY >= bounds.top + verticalInset
+    && clientY <= bounds.top + bounds.height - verticalInset
+  )
 }
 
 export function areBoardTilesAdjacent(leftIndex: number, rightIndex: number, size: number) {
