@@ -20,6 +20,10 @@ export type RoomSession = {
   boardSource: BoardSource
   playerLimit: number
   lobbyLocked: boolean
+  scrabbleTurnOrder: string[]
+  scrabbleTurnIndex: number
+  scrabbleTurnNumber: number
+  scrabblePendingWord: string | null
   status: 'active' | 'complete'
   createdAt: string
   updatedAt: string
@@ -243,6 +247,12 @@ function mapSession(value: unknown): RoomSession {
     boardSource: stringValue(row, 'board_source') as BoardSource,
     playerLimit: numberValue(row, 'player_limit'),
     lobbyLocked: booleanValue(row, 'lobby_locked'),
+    scrabbleTurnOrder: Array.isArray(row.scrabble_turn_order)
+      ? row.scrabble_turn_order.filter((value): value is string => typeof value === 'string')
+      : [],
+    scrabbleTurnIndex: numberValue(row, 'scrabble_turn_index'),
+    scrabbleTurnNumber: numberValue(row, 'scrabble_turn_number'),
+    scrabblePendingWord: nullableString(row, 'scrabble_pending_word'),
     status: stringValue(row, 'status') as RoomSession['status'],
     createdAt: stringValue(row, 'created_at'),
     updatedAt: stringValue(row, 'updated_at'),
@@ -417,7 +427,7 @@ export async function fetchRoomState(sessionId: string): Promise<RoomState | nul
   await ensureRoomAuth()
   const sessionQuery = roomsClient
     .from('game_sessions')
-    .select('id,mode,board_source,player_limit,lobby_locked,status,created_at,updated_at,finished_at')
+    .select('id,mode,board_source,player_limit,lobby_locked,scrabble_turn_order,scrabble_turn_index,scrabble_turn_number,scrabble_pending_word,status,created_at,updated_at,finished_at')
     .eq('id', sessionId)
     .single()
   const membersQuery = roomsClient.from('game_members').select('*').eq('session_id', sessionId).is('removed_at', null).order('sort_order')
@@ -494,6 +504,30 @@ export const openRoundSubmissions = (roundId: string) =>
 export const startScrabbleRoom = (sessionId: string) =>
   rpc<unknown>('start_scrabble_game', { p_session_id: sessionId }).then((row) => (row ? mapSession(row) : null))
 
+export const checkScrabbleTurn = (
+  sessionId: string,
+  expectedTurnNumber: number,
+  word: string,
+  dictionaryValid: boolean,
+) => rpc<unknown>('check_scrabble_turn', {
+  p_session_id: sessionId,
+  p_expected_turn_number: expectedTurnNumber,
+  p_word: word,
+  p_dictionary_valid: dictionaryValid,
+}).then((row) => (row ? mapSession(row) : null))
+
+export const passScrabbleTurn = (sessionId: string, expectedTurnNumber: number) =>
+  rpc<unknown>('pass_scrabble_turn', {
+    p_session_id: sessionId,
+    p_expected_turn_number: expectedTurnNumber,
+  }).then((row) => (row ? mapSession(row) : null))
+
+export const skipScrabbleTurn = (sessionId: string, expectedTurnNumber: number) =>
+  rpc<unknown>('skip_scrabble_turn', {
+    p_session_id: sessionId,
+    p_expected_turn_number: expectedTurnNumber,
+  }).then((row) => (row ? mapSession(row) : null))
+
 export function createNextRound(sessionId: string, gridSize: 4 | 5 = 4, timerSeconds = 180) {
   return rpc<unknown>('create_next_round', {
     p_session_id: sessionId,
@@ -555,12 +589,19 @@ export const finalizeRoomRound = (roundId: string) =>
 export const reopenLatestRound = (roundId: string) =>
   rpc<unknown>('reopen_latest_round', { p_round_id: roundId }).then((row) => (row ? mapRound(row) : null))
 
-export function submitScrabbleScore(sessionId: string, entryId: string, word: string, points: number) {
+export function submitScrabbleScore(
+  sessionId: string,
+  entryId: string,
+  word: string,
+  points: number,
+  expectedTurnNumber: number,
+) {
   return rpc<unknown>('submit_scrabble_entry', {
     p_session_id: sessionId,
     p_client_entry_id: entryId,
     p_word: word,
     p_points: points,
+    p_expected_turn_number: expectedTurnNumber,
   }).then((row) => (row ? mapScoreEntry(row) : null))
 }
 

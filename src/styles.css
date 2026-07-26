@@ -1354,6 +1354,13 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .scrabble-entry { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
 .scrabble-entry label { margin: 0; }
 .scrabble-entry input { min-height: 60px; background: var(--white); font: 780 25px 'Fraunces Variable', serif; letter-spacing: .08em; }
+.scrabble-turn-order { margin: 18px 0; border: 1.5px solid var(--ink); border-radius: 12px; background: rgba(255, 254, 250, .72); padding: 12px; }
+.scrabble-turn-order > span { display: flex; align-items: center; gap: 7px; font-size: 9px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+.scrabble-turn-order ol { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.scrabble-turn-order li { min-height: 37px; display: grid; grid-template-columns: 24px auto; align-items: center; gap: 7px; border: 1px solid var(--ink); border-radius: 9px; background: var(--white); padding: 5px 9px 5px 5px; font-size: 9px; font-weight: 800; }
+.scrabble-turn-order li > b { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 7px; background: var(--lilac); }
+.scrabble-turn-order li > small { grid-column: 2; margin-top: -5px; color: #5e5851; font-size: 7px; text-transform: uppercase; }
+.scrabble-turn-order li.is-current { background: var(--mint-light); box-shadow: 2px 2px 0 var(--ink); }
 .word-verdict { display: flex; align-items: center; gap: 12px; margin-top: 16px; border: 1.5px solid var(--ink); border-radius: 11px; padding: 12px; background: var(--white); }
 .word-verdict.valid { background: var(--mint-light); }
 .word-verdict.invalid { background: var(--coral-light); color: #812e28; }
@@ -1364,6 +1371,63 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .manual-score { display: grid; grid-template-columns: 130px auto; gap: 10px; align-items: end; justify-content: end; margin-top: 16px; }
 .manual-score label { margin: 0; }
 .manual-score input { text-align: center; font: 800 23px 'Fraunces Variable', serif; }
+.definition-card { margin-top: 12px; border: 1.5px solid var(--ink); border-radius: 12px; background: var(--white); overflow: hidden; }
+.definition-card > header { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--ink); background: var(--lilac); padding: 11px 13px; }
+.definition-card > header > span { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 50%; background: var(--white); }
+.definition-card header strong { font: 790 22px 'Fraunces Variable', serif; letter-spacing: .06em; }
+.definition-card header small { display: block; margin-top: 1px; color: #5f5866; font-size: 9px; }
+.definition-meanings { display: grid; gap: 11px; padding: 13px 15px 15px; }
+.definition-meanings section > b { display: block; margin-bottom: 4px; color: #625a70; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
+.definition-meanings ol { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
+.definition-meanings li { font-size: 10px; line-height: 1.5; }
+.definition-state { display: flex; align-items: center; gap: 7px; margin: 0; padding: 15px; color: #655f57; font-size: 9px; }
+.scrabble-turn-actions { display: flex; justify-content: flex-end; margin-top: 11px; }
+.scrabble-waiting { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 7px; border: 1.5px dashed #7e7461; border-radius: 12px; background: rgba(255,254,250,.55); padding: 22px; text-align: center; }
+.scrabble-waiting > svg { color: #716650; }
+.scrabble-waiting strong { font: 760 19px 'Fraunces Variable', serif; }
+.scrabble-waiting small { color: #6b6358; font-size: 9px; }
+.scrabble-offline { display: flex; align-items: center; gap: 8px; border: 1px solid var(--ink); border-radius: 9px; background: var(--coral-light); padding: 9px 11px; font-size: 9px; font-weight: 750; }
+.scrabble-host-recovery { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; border-top: 1px solid rgba(37,35,31,.45); padding-top: 13px; }
+.scrabble-host-recovery > span { font-size: 8px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+
+.final-leaderboard { overflow: hidden; background: var(--white); padding: 0; }
+.winner-banner { display: grid; place-items: center; border-bottom: var(--line); background: var(--mint-light); padding: 34px 24px 28px; text-align: center; }
+.winner-medal { width: 70px; height: 70px; display: grid; place-items: center; border: var(--line); border-radius: 50%; background: var(--lemon); box-shadow: 4px 4px 0 var(--ink); margin-bottom: 15px; }
+.winner-banner h2 { margin: 2px 0 4px; font: 800 clamp(36px, 6vw, 61px) 'Fraunces Variable', serif; letter-spacing: -.04em; }
+.winner-banner > p:last-child { margin: 0; color: #57524b; font-size: 10px; }
+.final-podium { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); align-items: end; gap: 11px; border-bottom: var(--line); background: var(--lemon); padding: 24px; }
+.podium-place { min-height: 145px; display: grid; place-items: center; align-content: center; gap: 7px; border: 1.5px solid var(--ink); border-radius: 13px 13px 4px 4px; background: var(--white); box-shadow: 3px 3px 0 var(--ink); padding: 13px 8px; text-align: center; }
+.podium-place.rank-1 { min-height: 175px; background: #fff4b8; }
+.podium-place.rank-2 { min-height: 157px; }
+.podium-place.rank-3 { min-height: 145px; background: #ffe0ca; }
+.podium-place > strong { font: 760 18px 'Fraunces Variable', serif; }
+.podium-place > b { font: 850 25px 'Fraunces Variable', serif; }
+.podium-place > b small { font: 800 8px 'Manrope Variable', sans-serif; text-transform: uppercase; }
+.final-ranking,
+.final-round-history { padding: 25px; }
+.final-ranking h3,
+.final-round-history h3 { margin: 0; font: 780 28px 'Fraunces Variable', serif; }
+.final-ranking > ol { margin: 17px 0 0; border-top: 1.5px solid var(--ink); }
+.final-ranking > ol > li { min-height: 72px; display: grid; grid-template-columns: 36px minmax(100px, 1fr) minmax(130px, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #ddd6cb; padding: 9px 3px; }
+.final-rank { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 50%; background: var(--lilac); font-size: 10px; font-weight: 900; }
+.final-player strong,
+.final-player small,
+.final-best strong,
+.final-best small,
+.final-ranking > ol > li > b small { display: block; }
+.final-player strong { font-size: 11px; }
+.final-player small,
+.final-best small { margin-top: 2px; color: #746d64; font-size: 8px; }
+.final-best { text-align: right; }
+.final-best strong { margin-top: 2px; font-size: 9px; }
+.final-ranking > ol > li > b { min-width: 64px; font: 820 23px 'Fraunces Variable', serif; text-align: right; }
+.final-ranking > ol > li > b small { font: 800 7px 'Manrope Variable', sans-serif; text-transform: uppercase; }
+.final-round-history { border-top: var(--line); background: #fffaf0; }
+.final-round-history > div:last-child { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 11px; margin-top: 16px; }
+.final-round-history article { border: 1.5px solid var(--ink); border-radius: 11px; background: var(--white); overflow: hidden; }
+.final-round-history article > strong { display: block; border-bottom: 1px solid var(--ink); background: var(--blue); padding: 9px 11px; font-size: 10px; }
+.final-round-history article li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid #e0d9ce; padding: 8px 10px; font-size: 8px; }
+.final-round-history article li:last-child { border-bottom: 0; }
 
 .room-sidebar .scoreboard-card,
 .room-sidebar .plays-card,
@@ -1547,4 +1611,33 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
   .quick-word-form .primary-button { min-width: 0; padding-inline: 8px; }
   .online-word-list { max-height: 220px; }
   .round-complete > div { width: 100%; flex-direction: column; }
+}
+
+@media (max-width: 760px) {
+  .scrabble-turn-order ol { display: grid; grid-template-columns: 1fr 1fr; }
+  .scrabble-turn-order li { min-width: 0; }
+  .scrabble-host-recovery { align-items: stretch; flex-direction: column; }
+  .final-podium { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 18px 12px; }
+  .podium-place,
+  .podium-place.rank-1,
+  .podium-place.rank-2,
+  .podium-place.rank-3 { min-height: 135px; padding-inline: 5px; }
+  .podium-place > strong { font-size: 14px; overflow-wrap: anywhere; }
+  .podium-place > b { font-size: 21px; }
+  .final-ranking,
+  .final-round-history { padding: 21px 15px; }
+  .final-ranking > ol > li { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .final-best { grid-column: 2 / -1; text-align: left; }
+  .final-ranking > ol > li > b { grid-column: 3; grid-row: 1; }
+}
+
+@media (max-width: 430px) {
+  .scrabble-turn-order ol { grid-template-columns: 1fr; }
+  .scrabble-turn-actions > button { width: 100%; justify-content: center; }
+  .winner-banner { padding-inline: 15px; }
+  .final-podium { grid-template-columns: 1fr; align-items: stretch; }
+  .podium-place,
+  .podium-place.rank-1,
+  .podium-place.rank-2,
+  .podium-place.rank-3 { min-height: 105px; border-radius: 11px; }
 }
