@@ -50,7 +50,8 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 - Private parallel submissions that reveal together when the host closes the round
 - Automatic dictionary, board-path, minimum-length, and duplicate checking
 - Live roster, readiness, timer, reveal, score ledger, and scoreboard updates
-- Scrabble dictionary checking with manual board-score entry
+- Turn-based Scrabble with shuffled play order, shared definitions, passes, and manual board-score entry
+- Podium-style final leaderboard with totals, scoring-word counts, and best plays
 
 ## Production engineering
 
@@ -132,7 +133,7 @@ The service worker precaches the application, SOWPODS bundle, fonts, Tesseract w
 
 | Mode | Validation and scoring |
 | --- | --- |
-| Scrabble | Checks the word against the bundled SOWPODS dictionary. Players enter the board score manually so multipliers and bonuses remain part of the physical game. |
+| Scrabble | A shuffled order controls the shared checker. Valid words use bundled SOWPODS validation, display an online-and-cached meaning, and accept a manual board score so physical multipliers and bonuses are preserved. Invalid words and passes advance the turn immediately. |
 | Boggle | Words must contain at least 3 letters. 3–4 letters = 1 point, 5 = 2, 6 = 3, 7 = 5, and 8+ = 11. Exact matches between players score zero. |
 | Scribbage / Word Factory | Words must contain at least 4 letters. 4 letters = 1 point, 5 = 2, 6 = 3, 7 = 5, and 8+ = 11. Exact matches between players score zero. |
 
@@ -147,8 +148,11 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 5. At zero, the host client automatically freezes submissions, validates the lists with SOWPODS and adjacent-tile paths, and publishes the reveal. A reconnecting host resumes interrupted processing.
 6. In a physical Boggle or Word Factory round, the host instead photographs or manually enters the grid; players scan, crop, review, and submit their handwritten answers after play.
 7. Wordwell crosses out same-player and cross-player duplicates, scores valid answers, and carries finalized totals into the next host-controlled round.
+8. Finishing any game opens a final podium and leaderboard with each player’s total, scoring-word count, and highest-value play.
 
 Photos are processed locally and are not uploaded to Supabase. The temporary image is removed after local OCR finishes; reviewed drafts can remain on the phone so a lost connection does not erase a player's work.
+
+Scrabble word validation remains bundled with the app, but shared turns require a live connection so the server can prevent out-of-turn or repeated checks. Meanings are fetched from the Free Dictionary API and cached after a successful lookup; a missing meaning never changes a SOWPODS result. The host can skip a stalled Scrabble turn, and an unscored pending word is discarded if the host finishes the game.
 
 ## Local Development
 

@@ -18,8 +18,10 @@ import {
   Gamepad2,
   History,
   Link2,
+  ListOrdered,
   LoaderCircle,
   LockKeyhole,
+  Medal,
   Minus,
   Pause,
   Play,
@@ -28,6 +30,8 @@ import {
   RotateCcw,
   ScanText,
   Send,
+  Shuffle,
+  SkipForward,
   Sparkles,
   Trophy,
   UserMinus,
@@ -60,8 +64,11 @@ import {
 } from './lib/capture'
 import { splitBoardImageIntoCells } from './lib/grid'
 import { evaluateGridRound } from './lib/round-engine'
+import { lookupWordDefinition, type WordDefinition } from './lib/definitions'
+import { buildGameSummary } from './lib/game-summary'
 import {
   applyWordOverride,
+  checkScrabbleTurn,
   closeRoomRound,
   confirmRoundBoard,
   confirmRoundSubmission,
@@ -76,6 +83,7 @@ import {
   isRoomsSupabaseConfigured,
   joinRoom,
   openRoundSubmissions,
+  passScrabbleTurn,
   pauseRoomRound,
   publishRoundResults,
   removeRoomMember,
@@ -84,6 +92,7 @@ import {
   startRoomRound,
   startScrabbleRoom,
   submitScrabbleScore,
+  skipScrabbleTurn,
   subscribeToRoom,
   subscribeToRound,
   type BoardSource,
@@ -109,7 +118,6 @@ type CaptureKind = 'board' | 'answers' | null
 type StoredRoom = RoomJoin & { roomCode?: string }
 
 const ACTIVE_ROOM_KEY = 'wordwell:multiplayer-room:v1'
-const SCRABBLE_QUEUE_KEY = 'wordwell:scrabble-queue:v1'
 const ONLINE_DRAFT_SUFFIX = ':generated'
 const PLAYER_COLORS = ['coral', 'mint', 'lemon', 'lilac', 'blue', 'peach']
 const captureStore = createCaptureStore()
@@ -136,16 +144,6 @@ function readStoredRoom(): StoredRoom | null {
 function saveStoredRoom(room: StoredRoom | null) {
   if (room) localStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify(room))
   else localStorage.removeItem(ACTIVE_ROOM_KEY)
-}
-
-type QueuedScrabbleEntry = { sessionId: string; entryId: string; word: string; points: number }
-
-function readScrabbleQueue(): QueuedScrabbleEntry[] {
-  try { return JSON.parse(localStorage.getItem(SCRABBLE_QUEUE_KEY) ?? '[]') as QueuedScrabbleEntry[] } catch { return [] }
-}
-
-function saveScrabbleQueue(entries: QueuedScrabbleEntry[]) {
-  localStorage.setItem(SCRABBLE_QUEUE_KEY, JSON.stringify(entries))
 }
 
 function errorMessage(error: unknown) {
@@ -224,7 +222,9 @@ function App() {
   const [queuedSubmission, setQueuedSubmission] = useState<{ clientToken: string; revision: number } | null>(null)
   const [scrabbleWord, setScrabbleWord] = useState('')
   const [scrabblePoints, setScrabblePoints] = useState('')
-  const [checkedScrabble, setCheckedScrabble] = useState<boolean | null>(null)
+  const [scrabbleInvalidNotice, setScrabbleInvalidNotice] = useState<string | null>(null)
+  const [scrabbleDefinition, setScrabbleDefinition] = useState<WordDefinition | null>(null)
+  const [definitionLoading, setDefinitionLoading] = useState(false)
   const [onlineWords, setOnlineWords] = useState<OnlineWord[]>([])
   const [onlineSyncState, setOnlineSyncState] = useState<OnlineWordSyncState>('not-submitted')
 
@@ -243,6 +243,18 @@ function App() {
   const me = roomState?.members.find((member) => member.id === activeRoom?.memberId) ?? null
   const isHost = Boolean(me?.isHost ?? activeRoom?.isHost)
   const players = roomState?.members.filter((member) => member.isPlayer && !member.removedAt) ?? []
+  const scrabbleTurnPlayers = roomState?.session.scrabbleTurnOrder
+    .map((memberId) => players.find((player) => player.id === memberId))
+    .filter((player): player is RoomMember => Boolean(player)) ?? []
+  const currentScrabblePlayer = scrabbleTurnPlayers[
+    roomState?.session.scrabbleTurnIndex ?? 0
+  ] ?? null
+  const isMyScrabbleTurn = Boolean(
+    roomState?.session.mode === 'scrabble'
+    && roomState.session.status === 'active'
+    && me?.isPlayer
+    && currentScrabblePlayer?.id === me.id,
+  )
   const legacyHistory = useMemo(() => loadHistory().filter((session) => session.status === 'complete'), [])
   const timerRemaining = currentRound ? roundSeconds(currentRound, now) : 0
   const countdownRemaining = currentRound ? roundCountdown(currentRound, now) : 0
@@ -370,6 +382,36 @@ function App() {
   }, [toast])
 
   useEffect(() => {
+    if (!scrabbleInvalidNotice) return
+    const timeout = window.setTimeout(() => setScrabbleInvalidNotice(null), 4200)
+    return () => window.clearTimeout(timeout)
+  }, [scrabbleInvalidNotice])
+
+  useEffect(() => {
+    setScrabbleWord('')
+    setScrabblePoints('')
+  }, [roomState?.session.scrabbleTurnNumber])
+
+  useEffect(() => {
+    const pendingWord = roomState?.session.scrabblePendingWord
+    if (!pendingWord || roomState?.session.status !== 'active') {
+      setScrabbleDefinition(null)
+      setDefinitionLoading(false)
+      return
+    }
+
+    let active = true
+    setDefinitionLoading(true)
+    setScrabbleDefinition(null)
+    void lookupWordDefinition(pendingWord).then((definition) => {
+      if (!active) return
+      setScrabbleDefinition(definition)
+      setDefinitionLoading(false)
+    })
+    return () => { active = false }
+  }, [roomState?.session.scrabblePendingWord, roomState?.session.status])
+
+  useEffect(() => {
     if (currentRound?.phase !== 'collecting' || !me) return
     const receipt = roomState?.submissions.find((submission) => submission.roundId === currentRound.id && submission.memberId === me.id)
     if (receipt && submissionMode !== 'draft') setSubmissionMode('submitted')
@@ -450,6 +492,11 @@ function App() {
     onlineWordsRef.current = []
     onlineScopeRef.current = null
     setOnlineSyncState('not-submitted')
+    setScrabbleWord('')
+    setScrabblePoints('')
+    setScrabbleInvalidNotice(null)
+    setScrabbleDefinition(null)
+    setDefinitionLoading(false)
     setGridSize(4)
     setBoardCells(Array(16).fill(''))
     setBoardReviewCells(Array(16).fill(false))
@@ -727,58 +774,97 @@ function App() {
     await roomAction(() => applyWordOverride(result.id, check, reason.trim()))
   }
 
-  function checkScrabbleWord() {
+  async function checkScrabbleWord() {
     const word = scrabbleWord.trim().toUpperCase()
-    if (!dictionary || !word) return
+    if (!dictionary || !word || !roomState) return
+    if (!isOnline) { setToast('Reconnect before checking a Scrabble word.'); return }
+    if (!isMyScrabbleTurn) { setToast(`It is ${currentScrabblePlayer?.displayName ?? 'another player'}’s turn.`); return }
+    const dictionaryValid = /^[A-Z]+$/.test(word) && dictionary.has(word)
     setScrabbleWord(word)
-    setCheckedScrabble(/^[A-Z]+$/.test(word) && dictionary.has(word))
+    setBusy(true)
+    try {
+      const nextSession = await checkScrabbleTurn(
+        roomState.session.id,
+        roomState.session.scrabbleTurnNumber,
+        word,
+        dictionaryValid,
+      )
+      await refreshRoom(true)
+      if (!dictionaryValid) {
+        const nextMemberId = nextSession?.scrabbleTurnOrder[nextSession.scrabbleTurnIndex]
+        const nextPlayer = players.find((player) => player.id === nextMemberId)
+        setScrabbleInvalidNotice(
+          `${word} is not accepted in SOWPODS. ${nextPlayer ? `${nextPlayer.displayName} is next.` : 'The turn has advanced.'}`,
+        )
+        setScrabbleWord('')
+      }
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function awardScrabbleWord() {
     const points = Number.parseInt(scrabblePoints, 10)
-    if (!checkedScrabble || !Number.isInteger(points) || points <= 0) { setToast('Check a valid word and enter its board score.'); return }
-    if (!roomState) { setToast('The room is not ready.'); return }
-    const queued = { sessionId: roomState.session.id, entryId: crypto.randomUUID(), word: scrabbleWord, points }
-    if (!navigator.onLine) {
-      saveScrabbleQueue([...readScrabbleQueue(), queued])
+    const pendingWord = roomState?.session.scrabblePendingWord
+    if (!pendingWord || !Number.isInteger(points) || points <= 0) { setToast('Enter the positive board score for the checked word.'); return }
+    if (!roomState || !isMyScrabbleTurn) { setToast('Only the current player can add this score.'); return }
+    if (!isOnline) { setToast('Reconnect before adding a Scrabble score.'); return }
+    setBusy(true)
+    try {
+      await submitScrabbleScore(
+        roomState.session.id,
+        crypto.randomUUID(),
+        pendingWord,
+        points,
+        roomState.session.scrabbleTurnNumber,
+      )
       setScrabbleWord('')
       setScrabblePoints('')
-      setCheckedScrabble(null)
-      setToast('Score saved on this phone and queued for reconnect.')
-      return
+      await refreshRoom(true)
+    } catch (error) {
+      setToast(errorMessage(error))
+    } finally {
+      setBusy(false)
     }
-    await roomAction(async () => {
-      await submitScrabbleScore(queued.sessionId, queued.entryId, queued.word, queued.points)
-      setScrabbleWord('')
-      setScrabblePoints('')
-      setCheckedScrabble(null)
-    })
+  }
+
+  async function passCurrentScrabbleTurn() {
+    if (!roomState || !isMyScrabbleTurn) return
+    if (!isOnline) { setToast('Reconnect before passing the turn.'); return }
+    if (!window.confirm('Pass this turn without checking a word?')) return
+    await roomAction(() => passScrabbleTurn(
+      roomState.session.id,
+      roomState.session.scrabbleTurnNumber,
+    ))
+  }
+
+  async function skipCurrentScrabbleTurn() {
+    if (!roomState || !isHost) return
+    if (!isOnline) { setToast('Reconnect before skipping the turn.'); return }
+    const name = currentScrabblePlayer?.displayName ?? 'the current player'
+    if (!window.confirm(`Skip ${name}’s turn without awarding points?`)) return
+    await roomAction(() => skipScrabbleTurn(
+      roomState.session.id,
+      roomState.session.scrabbleTurnNumber,
+    ))
+  }
+
+  async function finishCurrentGame() {
+    if (!roomState) return
+    if (
+      roomState.session.mode === 'scrabble'
+      && roomState.session.scrabblePendingWord
+      && !window.confirm(`${roomState.session.scrabblePendingWord} has not been scored. Finish the game and discard it?`)
+    ) return
+    await roomAction(() => finishRoomGame(roomState.session.id))
   }
 
   useEffect(() => {
     if (!isOnline || submissionMode !== 'queued' || !queuedSubmission || currentRound?.phase !== 'collecting') return
     void submitAnswers()
   }, [isOnline, submissionMode, queuedSubmission?.clientToken, currentRound?.phase])
-
-  useEffect(() => {
-    if (!isOnline || !roomState || roomState.session.mode !== 'scrabble') return
-    const pending = readScrabbleQueue().filter((entry) => entry.sessionId === roomState.session.id)
-    if (!pending.length) return
-    void (async () => {
-      const remaining = readScrabbleQueue().filter((entry) => entry.sessionId !== roomState.session.id)
-      for (let index = 0; index < pending.length; index += 1) {
-        try {
-          const entry = pending[index]
-          await submitScrabbleScore(entry.sessionId, entry.entryId, entry.word, entry.points)
-        } catch {
-          remaining.push(...pending.slice(index))
-          break
-        }
-      }
-      saveScrabbleQueue(remaining)
-      await refreshRoom(true)
-    })()
-  }, [isOnline, roomState?.session.id, roomState?.session.mode, refreshRoom])
 
   useEffect(() => {
     if (roomState?.session.boardSource !== 'generated' || currentRound?.phase !== 'playing') return
@@ -883,6 +969,10 @@ function App() {
             />
             <div className="room-layout">
               <div className="round-column">
+                {roomState.session.status === 'complete' ? (
+                  <FinalLeaderboard room={roomState} />
+                ) : (
+                  <>
                 {!roomState.session.lobbyLocked && roomState.session.mode === 'scrabble' && (
                   <LobbyPanel room={roomState} me={me} isHost={isHost} busy={busy} onRemove={(id) => roomAction(() => removeRoomMember(id))} onStart={() => roomAction(() => startScrabbleRoom(roomState.session.id))} />
                 )}
@@ -890,14 +980,25 @@ function App() {
                 {roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && (
                   <ScrabblePanel
                     dictionaryReady={Boolean(dictionary)}
+                    turnPlayers={scrabbleTurnPlayers}
+                    currentPlayer={currentScrabblePlayer}
+                    turnNumber={roomState.session.scrabbleTurnNumber}
+                    isMyTurn={isMyScrabbleTurn}
+                    isHost={isHost}
+                    isOnline={isOnline}
+                    pendingWord={roomState.session.scrabblePendingWord}
+                    definition={scrabbleDefinition}
+                    definitionLoading={definitionLoading}
+                    invalidNotice={scrabbleInvalidNotice}
                     word={scrabbleWord}
                     points={scrabblePoints}
-                    checked={checkedScrabble}
                     busy={busy}
-                    onWord={(value) => { setScrabbleWord(value.toUpperCase().replace(/[^A-Z]/g, '')); setCheckedScrabble(null) }}
+                    onWord={(value) => setScrabbleWord(value.toUpperCase().replace(/[^A-Z]/g, ''))}
                     onPoints={setScrabblePoints}
                     onCheck={checkScrabbleWord}
                     onAward={awardScrabbleWord}
+                    onPass={passCurrentScrabbleTurn}
+                    onSkip={skipCurrentScrabbleTurn}
                   />
                 )}
 
@@ -982,7 +1083,9 @@ function App() {
                 )}
 
                 {roomState.session.mode !== 'scrabble' && currentRound?.phase === 'finalized' && (
-                  <RoundCompletePanel room={roomState} round={currentRound} isHost={isHost} busy={busy} onNext={() => roomAction(() => createNextRound(roomState.session.id, currentRound.gridSize, currentRound.timerDurationSeconds))} onFinish={() => roomAction(() => finishRoomGame(roomState.session.id))} />
+                  <RoundCompletePanel room={roomState} round={currentRound} isHost={isHost} busy={busy} onNext={() => roomAction(() => createNextRound(roomState.session.id, currentRound.gridSize, currentRound.timerDurationSeconds))} onFinish={finishCurrentGame} />
+                )}
+                  </>
                 )}
               </div>
 
@@ -990,7 +1093,7 @@ function App() {
                 <Scoreboard scores={scoreboard} mode={roomState.session.mode} />
                 <Roster room={roomState} me={me} currentRound={currentRound} presence={presence} />
                 {roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && <ScrabbleHistory room={roomState} isHost={isHost} onVoid={(entryId) => { const reason = window.prompt('Why should this score be removed?'); if (reason?.trim()) void roomAction(() => voidScrabbleScore(entryId, reason.trim())) }} />}
-                {isHost && roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && <button className="finish-game-button" type="button" onClick={() => roomAction(() => finishRoomGame(roomState.session.id))}><Flag size={17} /> Finish game</button>}
+                {isHost && roomState.session.mode === 'scrabble' && roomState.session.lobbyLocked && roomState.session.status === 'active' && <button className="finish-game-button" type="button" onClick={finishCurrentGame}><Flag size={17} /> Finish game</button>}
               </aside>
             </div>
           </>
@@ -1121,8 +1224,231 @@ function RoundCompletePanel({ room, round, isHost, busy, onNext, onFinish }: { r
   return <section className="play-card round-complete"><span className="trophy-orbit"><Trophy size={38} /></span><p className="section-kicker">Round {round.roundNumber} complete</p><h2>Scores are locked in.</h2><p>{isHost ? 'Set up another board or finish the game and crown the winner.' : 'The host will decide whether there is another round.'}</p>{isHost && <div><button className="primary-button" type="button" onClick={onNext} disabled={busy}><Plus size={18} /> Next round</button><button className="secondary-button" type="button" onClick={onFinish} disabled={busy}><Flag size={17} /> Finish game</button></div>}{room.session.status === 'complete' && <p>Game complete.</p>}</section>
 }
 
-function ScrabblePanel({ dictionaryReady, word, points, checked, busy, onWord, onPoints, onCheck, onAward }: { dictionaryReady: boolean; word: string; points: string; checked: boolean | null; busy: boolean; onWord: (value: string) => void; onPoints: (value: string) => void; onCheck: () => void; onAward: () => void }) {
-  return <section className="play-card scrabble-panel"><div className="card-heading"><div><p className="section-kicker">Your turn</p><h2><BookOpen size={22} /> Check the word, enter the board score</h2><p>Wordwell validates against offline SOWPODS. You include tiles, multipliers, and bonuses manually.</p></div></div><div className="scrabble-entry"><label><span>Word played</span><input value={word} onChange={(event) => onWord(event.target.value)} placeholder="QUIZZED" autoCapitalize="characters" /></label><button className="secondary-button" type="button" onClick={onCheck} disabled={!dictionaryReady || !word}>{dictionaryReady ? 'Check word' : 'Opening dictionary…'}</button></div>{checked !== null && <div className={`word-verdict ${checked ? 'valid' : 'invalid'}`}>{checked ? <CheckCircle2 /> : <XCircle />}<span><strong>{checked ? 'Valid SOWPODS word' : 'Not accepted'}</strong><small>{checked ? 'Enter the score shown on your board.' : 'Check the spelling or use your agreed house rule.'}</small></span></div>}{checked && <div className="manual-score"><label><span>Board score</span><input type="number" min="1" inputMode="numeric" value={points} onChange={(event) => onPoints(event.target.value)} placeholder="0" /></label><button className="primary-button" type="button" onClick={onAward} disabled={busy || Number(points) <= 0}><Send size={18} /> Add my score</button></div>}</section>
+type ScrabblePanelProps = {
+  dictionaryReady: boolean
+  turnPlayers: RoomMember[]
+  currentPlayer: RoomMember | null
+  turnNumber: number
+  isMyTurn: boolean
+  isHost: boolean
+  isOnline: boolean
+  pendingWord: string | null
+  definition: WordDefinition | null
+  definitionLoading: boolean
+  invalidNotice: string | null
+  word: string
+  points: string
+  busy: boolean
+  onWord: (value: string) => void
+  onPoints: (value: string) => void
+  onCheck: () => void
+  onAward: () => void
+  onPass: () => void
+  onSkip: () => void
+}
+
+function DefinitionCard({
+  word,
+  definition,
+  loading,
+}: {
+  word: string
+  definition: WordDefinition | null
+  loading: boolean
+}) {
+  return (
+    <div className="definition-card" aria-live="polite">
+      <header>
+        <span><BookOpen size={18} /></span>
+        <div>
+          <strong>{word}</strong>
+          {definition?.phonetic && <small>{definition.phonetic}</small>}
+        </div>
+      </header>
+      {loading ? (
+        <p className="definition-state"><LoaderCircle className="spin" size={16} /> Looking up the meaning…</p>
+      ) : definition ? (
+        <div className="definition-meanings">
+          {definition.meanings.map((meaning) => (
+            <section key={meaning.partOfSpeech}>
+              <b>{meaning.partOfSpeech}</b>
+              <ol>{meaning.definitions.map((item) => <li key={item}>{item}</li>)}</ol>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <p className="definition-state">Meaning unavailable. The SOWPODS result is still valid.</p>
+      )}
+    </div>
+  )
+}
+
+function ScrabblePanel(props: ScrabblePanelProps) {
+  const canCheck = props.isMyTurn
+    && props.isOnline
+    && !props.pendingWord
+    && props.dictionaryReady
+    && Boolean(props.word)
+    && !props.busy
+
+  return (
+    <section className="play-card scrabble-panel">
+      <div className="card-heading">
+        <div>
+          <p className="section-kicker">Turn {props.turnNumber}</p>
+          <h2><Shuffle size={22} /> {props.currentPlayer?.displayName ?? 'Waiting for the turn order'}</h2>
+          <p>{props.isMyTurn ? 'It is your turn.' : `${props.currentPlayer?.displayName ?? 'The next player'} has the checker.`} Valid words use offline SOWPODS.</p>
+        </div>
+        <span className={`status-chip ${props.isMyTurn ? 'ready' : 'waiting'}`}>{props.isMyTurn ? 'Your turn' : 'Waiting'}</span>
+      </div>
+
+      <div className="scrabble-turn-order">
+        <span><ListOrdered size={17} /> Shuffled order</span>
+        <ol>
+          {props.turnPlayers.map((player, index) => (
+            <li className={player.id === props.currentPlayer?.id ? 'is-current' : ''} key={player.id}>
+              <b>{index + 1}</b>
+              <span>{player.displayName}</span>
+              {player.id === props.currentPlayer?.id && <small>Playing</small>}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {props.invalidNotice && (
+        <div className="word-verdict invalid" role="status">
+          <XCircle />
+          <span><strong>Not accepted</strong><small>{props.invalidNotice}</small></span>
+        </div>
+      )}
+
+      {props.pendingWord ? (
+        <>
+          <div className="word-verdict valid">
+            <CheckCircle2 />
+            <span>
+              <strong>Valid SOWPODS word</strong>
+              <small>{props.isMyTurn ? 'Enter the score shown on the board.' : `${props.currentPlayer?.displayName ?? 'The current player'} is entering the board score.`}</small>
+            </span>
+          </div>
+          <DefinitionCard word={props.pendingWord} definition={props.definition} loading={props.definitionLoading} />
+          {props.isMyTurn && (
+            <div className="manual-score">
+              <label><span>Board score</span><input type="number" min="1" inputMode="numeric" value={props.points} onChange={(event) => props.onPoints(event.target.value)} placeholder="0" /></label>
+              <button className="primary-button" type="button" onClick={props.onAward} disabled={props.busy || !props.isOnline || Number(props.points) <= 0}><Send size={18} /> Add my score</button>
+            </div>
+          )}
+        </>
+      ) : props.isMyTurn ? (
+        <>
+          {!props.isOnline && <p className="scrabble-offline"><WifiOff size={17} /> Reconnect to check, score, or pass this shared turn.</p>}
+          <div className="scrabble-entry">
+            <label><span>Word played</span><input value={props.word} onChange={(event) => props.onWord(event.target.value)} placeholder="QUIZZED" autoCapitalize="characters" disabled={!props.isOnline || props.busy} /></label>
+            <button className="secondary-button" type="button" onClick={props.onCheck} disabled={!canCheck}>{props.dictionaryReady ? 'Check word' : 'Opening dictionary…'}</button>
+          </div>
+          <div className="scrabble-turn-actions">
+            <button className="secondary-button" type="button" onClick={props.onPass} disabled={props.busy || !props.isOnline}><SkipForward size={17} /> Pass turn</button>
+          </div>
+        </>
+      ) : (
+        <div className="scrabble-waiting">
+          <Clock3 />
+          <strong>Only {props.currentPlayer?.displayName ?? 'the current player'} can check a word.</strong>
+          <small>The checker will unlock automatically when your turn arrives.</small>
+        </div>
+      )}
+
+      {props.isHost && (!props.isMyTurn || Boolean(props.pendingWord)) && (
+        <div className="scrabble-host-recovery">
+          <span>Host recovery</span>
+          <button className="secondary-button" type="button" onClick={props.onSkip} disabled={props.busy || !props.isOnline}><SkipForward size={17} /> Skip stalled turn</button>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function FinalLeaderboard({ room }: { room: RoomState }) {
+  const summary = buildGameSummary(room)
+  const podium = summary.filter((player) => player.rank <= 3)
+  const winners = summary.filter((player) => player.rank === 1)
+  const playerIndex = new Map(
+    room.members.filter((member) => member.isPlayer).map((member, index) => [member.id, index]),
+  )
+  const finalizedRounds = room.rounds.filter((round) => round.phase === 'finalized')
+
+  const roundTotals = finalizedRounds.map((round) => {
+    const totals = new Map(room.members.filter((member) => member.isPlayer).map((member) => [member.id, 0]))
+    const wordsById = new Map(room.words.map((word) => [word.id, word]))
+    const submissionsById = new Map(room.submissions.map((submission) => [submission.id, submission]))
+    for (const result of room.results.filter((item) => item.roundId === round.id && item.eligible && item.score > 0)) {
+      const word = wordsById.get(result.wordId)
+      const submission = word ? submissionsById.get(word.submissionId) : null
+      if (submission && totals.has(submission.memberId)) {
+        totals.set(submission.memberId, (totals.get(submission.memberId) ?? 0) + result.score)
+      }
+    }
+    return { round, totals }
+  })
+
+  return (
+    <section className="play-card final-leaderboard">
+      <div className="winner-banner">
+        <span className="winner-medal"><Trophy size={34} /></span>
+        <p className="section-kicker">Game complete</p>
+        <h2>{winners.length > 1 ? 'Shared victory!' : `${winners[0]?.displayName ?? 'Game'} wins!`}</h2>
+        {winners.length > 1 && <p>{winners.map((winner) => winner.displayName).join(' & ')} tie for first.</p>}
+        {winners.length === 1 && <p>Top of the table with {winners[0].totalPoints} points.</p>}
+      </div>
+
+      <div className="final-podium" aria-label="Top finishers">
+        {podium.map((player) => (
+          <article className={`podium-place rank-${player.rank}`} key={player.memberId}>
+            <span className={`player-swatch ${PLAYER_COLORS[(playerIndex.get(player.memberId) ?? 0) % PLAYER_COLORS.length]}`}>{player.rank}</span>
+            <Medal size={20} />
+            <strong>{player.displayName}</strong>
+            <b>{player.totalPoints}<small> pts</small></b>
+          </article>
+        ))}
+      </div>
+
+      <div className="final-ranking">
+        <div className="history-title-row"><div><p className="section-kicker">Final standings</p><h3>Leaderboard</h3></div></div>
+        <ol>
+          {summary.map((player) => (
+            <li key={player.memberId}>
+              <span className="final-rank">{player.rank}</span>
+              <span className="final-player">
+                <strong>{player.displayName}</strong>
+                <small>{player.scoredWordCount} scoring {player.scoredWordCount === 1 ? 'word' : 'words'}</small>
+              </span>
+              <span className="final-best">
+                <small>Best play</small>
+                <strong>{player.bestScore === null ? '—' : `${player.bestWords.join(', ')} · ${player.bestScore}`}</strong>
+              </span>
+              <b>{player.totalPoints}<small> pts</small></b>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {room.session.mode !== 'scrabble' && roundTotals.length > 0 && (
+        <div className="final-round-history">
+          <div className="history-title-row"><div><p className="section-kicker">Score audit</p><h3>Round history</h3></div></div>
+          <div>
+            {roundTotals.map(({ round, totals }) => (
+              <article key={round.id}>
+                <strong>Round {round.roundNumber}</strong>
+                <ul>
+                  {summary.map((player) => <li key={player.memberId}><span>{player.displayName}</span><b>{totals.get(player.memberId) ?? 0} pts</b></li>)}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function Scoreboard({ scores, mode }: { scores: Array<RoomMember & { color: string; score: number }>; mode: RoomMode }) {
