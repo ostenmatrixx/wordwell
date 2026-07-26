@@ -44,7 +44,7 @@ The project is an open-source MVP. The core scoring, room, camera, OCR, and offl
 - Six-character room codes with anonymous Supabase authentication
 - Camera capture, cropping, on-device handwriting OCR, and manual answer review
 - Host-confirmed 4×4 or 5×5 Boggle/Scribbage boards
-- Online Word Factory with balanced generated 4×4 or 5×5 dice boards
+- Online Word Factory that rumbles fixed six-sided cube sets, including the physical-style 5×5 board
 - Synchronized countdown, server-authoritative timer, global pause, and automatic reveal
 - Private quick entry with revisioned autosave and offline draft recovery
 - Private parallel submissions that reveal together when the host closes the round
@@ -141,9 +141,9 @@ Dictionary editions and house rules can differ. Wordwell currently bundles the i
 
 ## Multiplayer round flow
 
-1. The host chooses the game mode, player count, board size, and timer. Word Factory rooms also choose a generated or physical board.
+1. The host chooses the game mode, player count, board size, and timer. Word Factory rooms also choose rumbled online cubes or a physical board.
 2. Players join with the room code and choose their display name.
-3. In a generated Word Factory round, Wordwell rolls a balanced dice-style grid and opens it on every phone after a synchronized three-second countdown.
+3. In an online Word Factory round, Wordwell shuffles the fixed cube inventory, rolls one of six faces on every cube, and opens the rumbled board on every phone after a synchronized three-second countdown.
 4. Players type into private, automatically saved lists. The board and entry field lock globally while paused and immediately at the server-calculated deadline.
 5. At zero, the host client automatically freezes submissions, validates the lists with SOWPODS and adjacent-tile paths, and publishes the reveal. A reconnecting host resumes interrupted processing.
 6. In a physical Boggle or Word Factory round, the host instead photographs or manually enters the grid; players scan, crop, review, and submit their handwritten answers after play.
