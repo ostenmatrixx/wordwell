@@ -1641,3 +1641,157 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
   .podium-place.rank-2,
   .podium-place.rank-3 { min-height: 105px; border-radius: 11px; }
 }
+
+@media (max-width: 760px) {
+  .online-round.is-entry-focused {
+    --online-board-size: max(116px, min(
+      calc(var(--online-visual-width, 100vw) - 24px),
+      calc(var(--online-visual-height, 100dvh) - 142px)
+    ));
+    position: fixed;
+    z-index: 200;
+    top: var(--online-visual-top, 0);
+    left: var(--online-visual-left, 0);
+    width: var(--online-visual-width, 100vw);
+    height: var(--online-visual-height, 100dvh);
+    min-height: 0;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 6px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding:
+      max(7px, env(safe-area-inset-top))
+      max(10px, env(safe-area-inset-right))
+      max(7px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
+    transform: none;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .online-round.is-entry-focused .online-round-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .online-round.is-entry-focused .online-round-heading h2,
+  .online-round.is-entry-focused .online-round-heading p:not(.section-kicker),
+  .online-round.is-entry-focused .round-instruction,
+  .online-round.is-entry-focused .online-word-list,
+  .online-round.is-entry-focused .online-empty-list,
+  .online-round.is-entry-focused .online-host-controls {
+    display: none;
+  }
+
+  .online-round.is-entry-focused .online-round-heading .section-kicker {
+    margin: 0;
+    font-size: 8px;
+    line-height: 1.25;
+  }
+
+  .online-round.is-entry-focused .round-timer,
+  .online-round.is-entry-focused .online-round-heading > .round-timer {
+    width: auto;
+    min-width: 112px;
+    min-height: 40px;
+    grid-template-columns: 20px auto;
+    column-gap: 5px;
+    padding: 5px 9px;
+    box-shadow: 2px 2px 0 var(--ink);
+  }
+
+  .online-round.is-entry-focused .round-timer > svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .online-round.is-entry-focused .round-timer strong {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .online-round.is-entry-focused .round-timer small {
+    grid-column: 2;
+    margin: 0;
+    font-size: 7px;
+    text-align: left;
+  }
+
+  .online-round.is-entry-focused .online-board-wrap {
+    width: var(--online-board-size);
+    max-width: 100%;
+    min-height: 0;
+    align-self: center;
+    justify-self: center;
+    margin: 0;
+  }
+
+  .online-round.is-entry-focused .online-shared-board {
+    width: 100%;
+    gap: clamp(3px, 1dvh, 6px);
+  }
+
+  .online-round.is-entry-focused .online-shared-board.size-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .online-round.is-entry-focused .online-shared-board.size-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .online-round.is-entry-focused .online-shared-board > span {
+    min-width: 0;
+    border-width: 1.5px;
+    border-radius: 7px;
+    box-shadow: 2px 2px 0 var(--ink);
+    font-size: clamp(16px, 7vw, 34px);
+    font-size: clamp(16px, min(8vw, 7dvh), 34px);
+  }
+
+  .online-round.is-entry-focused .online-shared-board.size-5 > span {
+    font-size: clamp(14px, 6vw, 28px);
+    font-size: clamp(14px, min(6.5vw, 6.5dvh), 28px);
+  }
+
+  .online-round.is-entry-focused .online-answer-desk {
+    align-self: end;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    overflow: visible;
+  }
+
+  .online-round.is-entry-focused .online-answer-title {
+    display: none;
+  }
+
+  .online-round.is-entry-focused .quick-word-form {
+    position: static;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 68px;
+    gap: 7px;
+    border: var(--line);
+    border-radius: 12px;
+    box-shadow: 3px 3px 0 var(--ink);
+    padding: 6px;
+  }
+
+  .online-round.is-entry-focused .quick-word-form input {
+    min-height: 47px;
+    font-size: 18px;
+  }
+
+  .online-round.is-entry-focused .quick-word-form .primary-button {
+    min-width: 0;
+    min-height: 47px;
+    padding: 6px;
+  }
+}
