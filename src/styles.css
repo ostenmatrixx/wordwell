@@ -1247,6 +1247,14 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .shared-board > span:nth-child(4n + 2) { background: var(--mint-light); }
 .shared-board > span:nth-child(4n + 3) { background: var(--lilac); }
 .shared-board small { position: absolute; right: 7px; bottom: 5px; font: 850 7px 'Manrope Variable'; }
+.board-tools { width: min(100%, 610px); min-height: 35px; display: flex; align-items: stretch; justify-content: flex-end; gap: 8px; margin: 22px auto 8px; }
+.board-rotate-button { min-height: 35px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1.5px solid var(--ink); border-radius: 9px; background: var(--white); box-shadow: 2px 2px 0 var(--ink); padding: 6px 10px; color: var(--ink); font-size: 8px; font-weight: 850; cursor: pointer; touch-action: manipulation; white-space: nowrap; }
+.board-rotate-button:hover:not(:disabled) { background: var(--lemon); transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+.board-rotate-button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: none; }
+.board-rotate-button:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+.board-rotate-button svg { width: 16px; height: 16px; }
+.board-rotate-button small { border-left: 1px solid currentColor; padding-left: 7px; font-size: 7px; font-weight: 900; }
+.physical-board-tools + .shared-board { margin-top: 10px; }
 .round-instruction { max-width: 560px; margin: 0 auto 25px; text-align: center; font-size: 10px; line-height: 1.5; font-weight: 700; }
 .host-controls { display: flex; justify-content: flex-end; gap: 10px; border-top: 1.5px dashed var(--ink); padding-top: 20px; }
 
@@ -1255,8 +1263,9 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .online-round-heading h2 { margin: 0; font: 790 36px 'Fraunces Variable', serif; letter-spacing: -.045em; }
 .online-round-heading p:not(.section-kicker) { max-width: 560px; margin: 8px 0 0; color: #655e55; font-size: 11px; line-height: 1.55; font-weight: 630; }
 .online-board-wrap { position: relative; width: min(100%, 540px); margin: 25px auto 15px; }
+.online-board-wrap > .board-tools { width: 100%; margin: 0 0 8px; }
 .online-board-stage { position: relative; }
-.board-trace-readout { min-height: 35px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; border: 1.5px solid var(--ink); border-radius: 9px; background: var(--white); padding: 6px 10px; text-align: center; }
+.board-trace-readout { min-width: 0; min-height: 35px; flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; border: 1.5px solid var(--ink); border-radius: 9px; background: var(--white); padding: 6px 10px; text-align: center; }
 .board-trace-readout small { font-size: 7px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
 .board-trace-readout strong { overflow: hidden; text-overflow: ellipsis; font: 790 14px 'Fraunces Variable', serif; letter-spacing: .06em; white-space: nowrap; }
 .board-trace-readout.is-tracing { background: var(--lemon); box-shadow: 2px 2px 0 var(--ink); }
@@ -1776,10 +1785,16 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
     margin: 0;
   }
 
+  .online-round.is-entry-focused .board-tools {
+    min-height: 27px;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+
   .online-round.is-entry-focused .board-trace-readout {
     min-height: 27px;
     gap: 5px;
-    margin-bottom: 4px;
+    margin: 0;
     padding: 3px 6px;
   }
 
@@ -1789,6 +1804,26 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 
   .online-round.is-entry-focused .board-trace-readout strong {
     font-size: 11px;
+  }
+
+  .online-round.is-entry-focused .board-rotate-button {
+    min-height: 27px;
+    gap: 4px;
+    padding: 3px 7px;
+  }
+
+  .online-round.is-entry-focused .board-rotate-button > span {
+    display: none;
+  }
+
+  .online-round.is-entry-focused .board-rotate-button svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .online-round.is-entry-focused .board-rotate-button small {
+    padding-left: 5px;
+    font-size: 6px;
   }
 
   .online-round.is-entry-focused .online-shared-board {

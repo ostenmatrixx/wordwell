@@ -28,6 +28,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   ScanText,
   Send,
   Shuffle,
@@ -50,6 +51,13 @@ import {
   type OnlineWordSyncState,
 } from './components/OnlineWordEntry'
 import { generateWordFactoryBoard } from './lib/board-generator'
+import {
+  boardRotationAnnouncement,
+  boardRotationDegrees,
+  nextBoardQuarterTurn,
+  rotatedBoardCells,
+  type BoardQuarterTurn,
+} from './lib/board-rotation'
 import {
   answerTextToDraftRows,
   captureDraftKey,
@@ -1261,7 +1269,50 @@ function LobbyPanel({ room, me, isHost, busy, onRemove, onStart, startLabel = 'S
 }
 
 function LiveRoundPanel({ round, seconds, isHost, busy, onPause, onResume, onCollect }: { round: GameRound; seconds: number; isHost: boolean; busy: boolean; onPause: () => void; onResume: () => void; onCollect: () => void }) {
-  return <section className="play-card live-round"><div className="live-round-top"><div><p className="section-kicker">Round {round.roundNumber} · Write on paper</p><h2>Find every word you can</h2></div><div className={`round-timer ${seconds <= 10 ? 'urgent' : ''}`} aria-label={`${seconds} seconds remaining`}><Clock3 /><strong>{round.timerDurationSeconds === 0 ? '∞' : formatTimer(seconds)}</strong><small>{round.timerPausedAt ? 'Paused' : 'Remaining'}</small></div></div><div className={`shared-board size-${round.gridSize}`}>{round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => <span key={`${rowIndex}-${columnIndex}`}>{cell}<small>{rowIndex * round.gridSize + columnIndex + 1}</small></span>))}</div><p className="round-instruction">Letters may connect horizontally, vertically, or diagonally. A tile cannot be reused in the same word.</p>{isHost && <div className="host-controls"><button className="secondary-button" type="button" disabled={busy} onClick={round.timerPausedAt ? onResume : onPause}>{round.timerPausedAt ? <Play size={17} /> : <Pause size={17} />}{round.timerPausedAt ? 'Resume' : 'Pause'}</button><button className="primary-button" type="button" disabled={busy} onClick={onCollect}><ScanText size={18} /> Collect answers now</button></div>}</section>
+  const [boardRotation, setBoardRotation] = useState<BoardQuarterTurn>(0)
+  const [rotationAnnouncement, setRotationAnnouncement] = useState('')
+  const rotationDegrees = boardRotationDegrees(boardRotation)
+  const displayedBoardCells = rotatedBoardCells(round.grid, boardRotation)
+
+  useEffect(() => {
+    setBoardRotation(0)
+    setRotationAnnouncement('')
+  }, [round.id])
+
+  function rotateBoard() {
+    const nextRotation = nextBoardQuarterTurn(boardRotation)
+    setBoardRotation(nextRotation)
+    setRotationAnnouncement(boardRotationAnnouncement(nextRotation))
+  }
+
+  return (
+    <section className="play-card live-round">
+      <div className="live-round-top">
+        <div><p className="section-kicker">Round {round.roundNumber} · Write on paper</p><h2>Find every word you can</h2></div>
+        <div className={`round-timer ${seconds <= 10 ? 'urgent' : ''}`} aria-label={`${seconds} seconds remaining`}><Clock3 /><strong>{round.timerDurationSeconds === 0 ? '∞' : formatTimer(seconds)}</strong><small>{round.timerPausedAt ? 'Paused' : 'Remaining'}</small></div>
+      </div>
+      <div className="board-tools physical-board-tools">
+        <button
+          className="board-rotate-button"
+          type="button"
+          aria-label={`Rotate board 90 degrees clockwise. Current orientation ${rotationDegrees} degrees.`}
+          onClick={rotateBoard}
+        >
+          <RotateCw />
+          <span>Rotate board</span>
+          <small aria-hidden="true">{rotationDegrees}°</small>
+        </button>
+        <span className="sr-only" aria-live="polite">{rotationAnnouncement}</span>
+      </div>
+      <div className={`shared-board size-${round.gridSize}`} aria-label={`${round.gridSize} by ${round.gridSize} letter board at ${rotationDegrees} degrees`}>
+        {displayedBoardCells.map((cell) => (
+          <span key={cell.sourceIndex}>{cell.value}<small>{cell.sourceIndex + 1}</small></span>
+        ))}
+      </div>
+      <p className="round-instruction">Letters may connect horizontally, vertically, or diagonally. A tile cannot be reused in the same word.</p>
+      {isHost && <div className="host-controls"><button className="secondary-button" type="button" disabled={busy} onClick={round.timerPausedAt ? onResume : onPause}>{round.timerPausedAt ? <Play size={17} /> : <Pause size={17} />}{round.timerPausedAt ? 'Resume' : 'Pause'}</button><button className="primary-button" type="button" disabled={busy} onClick={onCollect}><ScanText size={18} /> Collect answers now</button></div>}
+    </section>
+  )
 }
 
 function ReadinessPanel({ room, round, dictionaryReady, busy, onClose }: { room: RoomState; round: GameRound; dictionaryReady: boolean; busy: boolean; onClose: () => void }) {
