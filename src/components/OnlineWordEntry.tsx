@@ -230,7 +230,7 @@ export function OnlineWordEntry({
     >
       <div className="online-round-heading">
         <div>
-          <p className="section-kicker">Round {round.roundNumber} · Generated board</p>
+          <p className="section-kicker">Round {round.roundNumber} · Rumbled {round.gridSize ** 2}-cube board</p>
           <h2 id="online-round-title">Find it. Type it. Keep moving.</h2>
           <p>Answers stay private until the timer ends and every list is checked together.</p>
         </div>
@@ -242,7 +242,7 @@ export function OnlineWordEntry({
       </div>
 
       <div className="online-board-wrap">
-        <div className={`shared-board online-shared-board size-${round.gridSize}${active ? '' : ' is-covered'}`} aria-label={`${round.gridSize} by ${round.gridSize} generated letter board`}>
+        <div className={`shared-board online-shared-board size-${round.gridSize}${active ? '' : ' is-covered'}`} aria-label={`${round.gridSize} by ${round.gridSize} rumbled letter-cube board`}>
           {round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => (
             <span key={`${rowIndex}-${columnIndex}`}>{cell}<small>{rowIndex * round.gridSize + columnIndex + 1}</small></span>
           )))}
@@ -250,7 +250,7 @@ export function OnlineWordEntry({
         {!active && (
           <div className={`board-state-cover ${countdown > 0 ? 'countdown' : ''}`} role="status">
             {countdown > 0 ? (
-              <><span>{countdown}</span><strong>Board opens together</strong><small>Get your keyboard ready.</small></>
+              <><span>{countdown}</span><strong>Cubes are rumbling</strong><small>The board opens together.</small></>
             ) : paused ? (
               <><Pause /><strong>Round paused</strong><small>The board and word entry are locked for everyone.</small></>
             ) : (

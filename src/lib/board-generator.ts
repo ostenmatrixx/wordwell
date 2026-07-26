@@ -1,22 +1,30 @@
 export type WordFactoryBoardSize = 4 | 5
 export type RandomSource = () => number
+export type WordFactoryCube = readonly [string, string, string, string, string, string]
 
-// Fixed dice-style sets keep vowels and uncommon letters balanced while still
-// producing a fresh board every round. Q is represented as the Word Factory QU tile.
-const WORD_FACTORY_DICE_4 = [
+function defineCube(faces: string): WordFactoryCube {
+  if (faces.length !== 6) throw new Error(`A letter cube requires six faces: ${faces}`)
+  const normalized = faces.split('').map((face) => face === 'Q' ? 'QU' : face)
+  return [normalized[0], normalized[1], normalized[2], normalized[3], normalized[4], normalized[5]]
+}
+
+// Word Factory does not draw 25 unrelated random letters. Like the physical
+// shaker, it rumbles a fixed inventory of six-sided cubes. The 5×5 inventory
+// mirrors the classic English 25-cube set; 4×4 keeps the compact cube set.
+const WORD_FACTORY_CUBES_4 = [
   'AAEEGN', 'ABBJOO', 'ACHOPS', 'AFFKPS',
   'AOOTTW', 'CIMOTU', 'DEILRX', 'DELRVY',
   'DISTTY', 'EEGHNW', 'EEINSU', 'EHRTVW',
   'EIOSST', 'ELRTTY', 'HIMNQU', 'HLNNRZ',
-] as const
+].map(defineCube)
 
-const WORD_FACTORY_DICE_5 = [
+const WORD_FACTORY_CUBES_5 = [
   'AAAFRS', 'AAEEEE', 'AAFIRS', 'ADENNN', 'AEEEEM',
   'AEEGMU', 'AEGMNN', 'AFIRSY', 'BJKQXZ', 'CCENST',
   'CEIILT', 'CEILPT', 'CEIPST', 'DDHNOT', 'DHHLOR',
-  'DHHNOW', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
+  'DHLNOR', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
   'FIPRSY', 'GORRVW', 'IPRRRY', 'NOOTUW', 'OOOTTU',
-] as const
+].map(defineCube)
 
 function secureRandom() {
   if (!globalThis.crypto?.getRandomValues) throw new Error('Secure randomness is unavailable')
@@ -34,27 +42,32 @@ function randomIndex(length: number, random: RandomSource) {
   return Math.floor(value * length)
 }
 
-export function getWordFactoryDice(size: WordFactoryBoardSize): readonly string[] {
-  return size === 4 ? WORD_FACTORY_DICE_4 : WORD_FACTORY_DICE_5
+export function getWordFactoryCubes(size: WordFactoryBoardSize): readonly WordFactoryCube[] {
+  return size === 4 ? WORD_FACTORY_CUBES_4 : WORD_FACTORY_CUBES_5
 }
 
-export function generateBoardFromDice(
-  dice: readonly string[],
+export function rumbleBoardFromCubes(
+  cubes: readonly (readonly string[])[],
   size: WordFactoryBoardSize,
   random: RandomSource,
 ) {
-  if (dice.length !== size * size) throw new Error(`A ${size}×${size} board requires ${size * size} dice`)
+  if (cubes.length !== size * size) throw new Error(`A ${size}×${size} board requires ${size * size} cubes`)
+  for (const cube of cubes) {
+    if (cube.length !== 6 || cube.some((face) => !/^(?:[A-Z]|QU)$/.test(face))) {
+      throw new Error(`Invalid cube faces: ${cube.join('')}`)
+    }
+  }
 
-  const rolled = dice.map((die) => {
-    if (!/^[A-Z]+$/.test(die)) throw new Error(`Invalid die faces: ${die}`)
-    const face = die[randomIndex(die.length, random)]
+  const cubesInTray = [...cubes]
+  for (let index = cubesInTray.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomIndex(index + 1, random)
+    ;[cubesInTray[index], cubesInTray[swapIndex]] = [cubesInTray[swapIndex], cubesInTray[index]]
+  }
+
+  const rolled = cubesInTray.map((cube) => {
+    const face = cube[randomIndex(6, random)]
     return face === 'Q' ? 'QU' : face
   })
-
-  for (let index = rolled.length - 1; index > 0; index -= 1) {
-    const swapIndex = randomIndex(index + 1, random)
-    ;[rolled[index], rolled[swapIndex]] = [rolled[swapIndex], rolled[index]]
-  }
 
   return Array.from({ length: size }, (_, row) => rolled.slice(row * size, (row + 1) * size))
 }
@@ -63,5 +76,5 @@ export function generateWordFactoryBoard(
   size: WordFactoryBoardSize,
   random: RandomSource = secureRandom,
 ) {
-  return generateBoardFromDice(getWordFactoryDice(size), size, random)
+  return rumbleBoardFromCubes(getWordFactoryCubes(size), size, random)
 }
