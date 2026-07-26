@@ -1,4 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import {
   Check,
   Clock3,
@@ -51,6 +59,27 @@ function syncCopy(state: OnlineWordSyncState) {
   return { icon: <CloudOff />, label: 'Not submitted yet' }
 }
 
+type EntryViewport = {
+  height: number
+  offsetLeft: number
+  offsetTop: number
+  width: number
+}
+
+function readEntryViewport(): EntryViewport {
+  const viewport = window.visualViewport
+  return {
+    height: Math.round(viewport?.height ?? window.innerHeight),
+    offsetLeft: Math.round(viewport?.offsetLeft ?? 0),
+    offsetTop: Math.round(viewport?.offsetTop ?? 0),
+    width: Math.round(viewport?.width ?? window.innerWidth),
+  }
+}
+
+function isMobileEntryViewport() {
+  return window.matchMedia('(max-width: 760px)').matches
+}
+
 export function OnlineWordEntry({
   round,
   seconds,
@@ -68,10 +97,119 @@ export function OnlineWordEntry({
   onEnd,
 }: Props) {
   const [draft, setDraft] = useState('')
+  const [entryFocused, setEntryFocused] = useState(false)
+  const [entryViewport, setEntryViewport] = useState<EntryViewport | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const scrollPositionRef = useRef(0)
   const paused = Boolean(round.timerPausedAt)
   const ended = seconds <= 0 && countdown <= 0
   const active = countdown <= 0 && !paused && !ended
   const status = syncCopy(ended ? 'locked' : syncState)
+  const entryStyle = entryFocused && entryViewport ? {
+    '--online-visual-height': `${entryViewport.height}px`,
+    '--online-visual-left': `${entryViewport.offsetLeft}px`,
+    '--online-visual-top': `${entryViewport.offsetTop}px`,
+    '--online-visual-width': `${entryViewport.width}px`,
+  } as CSSProperties : undefined
+
+  useLayoutEffect(() => {
+    if (!entryFocused) return
+
+    const bodyStyle = document.body.style
+    const previousBodyStyle = {
+      left: bodyStyle.left,
+      overflow: bodyStyle.overflow,
+      position: bodyStyle.position,
+      right: bodyStyle.right,
+      top: bodyStyle.top,
+      width: bodyStyle.width,
+    }
+    const scrollPosition = scrollPositionRef.current
+
+    bodyStyle.position = 'fixed'
+    bodyStyle.top = `-${scrollPosition}px`
+    bodyStyle.right = '0'
+    bodyStyle.left = '0'
+    bodyStyle.width = '100%'
+    bodyStyle.overflow = 'hidden'
+
+    return () => {
+      bodyStyle.position = previousBodyStyle.position
+      bodyStyle.top = previousBodyStyle.top
+      bodyStyle.right = previousBodyStyle.right
+      bodyStyle.left = previousBodyStyle.left
+      bodyStyle.width = previousBodyStyle.width
+      bodyStyle.overflow = previousBodyStyle.overflow
+      window.scrollTo({ top: scrollPosition, left: 0, behavior: 'instant' })
+    }
+  }, [entryFocused])
+
+  useEffect(() => {
+    if (!entryFocused) return
+
+    const viewport = window.visualViewport
+    let frame = 0
+    const updateViewport = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        if (!isMobileEntryViewport()) {
+          inputRef.current?.blur()
+          setEntryFocused(false)
+          return
+        }
+        const next = readEntryViewport()
+        setEntryViewport((current) => (
+          current
+          && current.height === next.height
+          && current.offsetLeft === next.offsetLeft
+          && current.offsetTop === next.offsetTop
+          && current.width === next.width
+            ? current
+            : next
+        ))
+      })
+    }
+
+    updateViewport()
+    viewport?.addEventListener('resize', updateViewport)
+    viewport?.addEventListener('scroll', updateViewport)
+    window.addEventListener('resize', updateViewport)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      viewport?.removeEventListener('resize', updateViewport)
+      viewport?.removeEventListener('scroll', updateViewport)
+      window.removeEventListener('resize', updateViewport)
+    }
+  }, [entryFocused])
+
+  useEffect(() => {
+    if (active) return
+    inputRef.current?.blur()
+    setEntryFocused(false)
+  }, [active])
+
+  function openEntryMode() {
+    if (!active || !isMobileEntryViewport()) return
+    if (!entryFocused) scrollPositionRef.current = window.scrollY
+    setEntryViewport(readEntryViewport())
+    setEntryFocused(true)
+  }
+
+  function handleEntryPointerDown(event: ReactPointerEvent<HTMLInputElement>) {
+    if (!active || !isMobileEntryViewport() || event.button !== 0) return
+
+    // Mobile browsers normally scroll a focused field into view before React
+    // can pin the play surface. Focus it ourselves without moving the page.
+    event.preventDefault()
+    openEntryMode()
+    inputRef.current?.focus({ preventScroll: true })
+  }
+
+  function closeEntryMode() {
+    window.setTimeout(() => {
+      if (document.activeElement !== inputRef.current) setEntryFocused(false)
+    }, 0)
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -79,10 +217,17 @@ export function OnlineWordEntry({
     if (!normalized || !active) return
     onAdd(normalized)
     setDraft('')
+    if (entryFocused) {
+      window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
+    }
   }
 
   return (
-    <section className="play-card online-round" aria-labelledby="online-round-title">
+    <section
+      className={`play-card online-round${entryFocused ? ' is-entry-focused' : ''}`}
+      aria-labelledby="online-round-title"
+      style={entryStyle}
+    >
       <div className="online-round-heading">
         <div>
           <p className="section-kicker">Round {round.roundNumber} · Generated board</p>
@@ -124,8 +269,8 @@ export function OnlineWordEntry({
             <span className={`online-sync-state is-${ended ? 'locked' : syncState}`} aria-live="polite">{status.icon}{status.label}</span>
           </div>
           <form className="quick-word-form" onSubmit={submit}>
-            <label><span className="sr-only">Add a word</span><input value={draft} onChange={(event) => setDraft(event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 80))} disabled={!active} placeholder={active ? 'TYPE A WORD' : countdown > 0 ? 'GET READY' : 'ENTRY LOCKED'} autoCapitalize="characters" autoComplete="off" spellCheck={false} /></label>
-            <button className="primary-button" type="submit" disabled={!active || !draft.trim()}><Plus size={18} /> Add</button>
+            <label><span className="sr-only">Add a word</span><input ref={inputRef} value={draft} onPointerDown={handleEntryPointerDown} onFocus={openEntryMode} onBlur={closeEntryMode} onChange={(event) => setDraft(event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 80))} disabled={!active} placeholder={active ? 'TYPE A WORD' : countdown > 0 ? 'GET READY' : 'ENTRY LOCKED'} autoCapitalize="characters" autoComplete="off" enterKeyHint="enter" inputMode="text" spellCheck={false} /></label>
+            <button className="primary-button" type="submit" disabled={!active || !draft.trim()} onPointerDown={(event) => { if (entryFocused) event.preventDefault() }}><Plus size={18} /> Add</button>
           </form>
           {words.length > 0 ? (
             <ol className="online-word-list">
