@@ -21,6 +21,11 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react'
+import {
+  boardTraceWord,
+  extendBoardTrace,
+  submitBoardTrace,
+} from '../lib/board-trace'
 import type { GameRound } from '../lib/rooms'
 
 export type OnlineWordSyncState = 'not-submitted' | 'saving' | 'saved' | 'offline' | 'locked'
@@ -67,6 +72,13 @@ type EntryViewport = {
   width: number
 }
 
+type TraceNotice = {
+  kind: 'added' | 'short'
+  word: string
+}
+
+const MINIMUM_TRACE_LENGTH = 4
+
 function readEntryViewport(): EntryViewport {
   const viewport = window.visualViewport
   return {
@@ -100,14 +112,21 @@ export function OnlineWordEntry({
   const [draft, setDraft] = useState('')
   const [entryFocused, setEntryFocused] = useState(false)
   const [entryViewport, setEntryViewport] = useState<EntryViewport | null>(null)
+  const [tracePath, setTracePath] = useState<number[]>([])
+  const [traceNotice, setTraceNotice] = useState<TraceNotice | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
   const scrollPositionRef = useRef(0)
   const restoreBodyRef = useRef<(() => void) | null>(null)
   const addPointerHandledRef = useRef(false)
+  const tracePathRef = useRef<number[]>([])
+  const tracePointerRef = useRef<number | null>(null)
+  const traceNoticeTimerRef = useRef<number | null>(null)
   const paused = Boolean(round.timerPausedAt)
   const ended = seconds <= 0 && countdown <= 0
   const active = countdown <= 0 && !paused && !ended
   const status = syncCopy(ended ? 'locked' : syncState)
+  const tracedWord = boardTraceWord(round.grid, tracePath)
   const entryStyle = entryFocused && entryViewport ? {
     '--online-visual-height': `${entryViewport.height}px`,
     '--online-visual-left': `${entryViewport.offsetLeft}px`,
@@ -201,6 +220,107 @@ export function OnlineWordEntry({
     setEntryFocused(false)
   }, [active])
 
+  useEffect(() => {
+    cancelBoardTrace()
+    clearTraceNotice()
+  }, [round.id, active, isPlayer])
+
+  useEffect(() => () => {
+    if (traceNoticeTimerRef.current !== null) window.clearTimeout(traceNoticeTimerRef.current)
+  }, [])
+
+  function updateTracePath(path: number[]) {
+    tracePathRef.current = path
+    setTracePath(path)
+  }
+
+  function clearTraceNotice() {
+    if (traceNoticeTimerRef.current !== null) {
+      window.clearTimeout(traceNoticeTimerRef.current)
+      traceNoticeTimerRef.current = null
+    }
+    setTraceNotice(null)
+  }
+
+  function showTraceNotice(notice: TraceNotice) {
+    clearTraceNotice()
+    setTraceNotice(notice)
+    traceNoticeTimerRef.current = window.setTimeout(() => {
+      traceNoticeTimerRef.current = null
+      setTraceNotice(null)
+    }, 1100)
+  }
+
+  function cancelBoardTrace() {
+    const pointerId = tracePointerRef.current
+    tracePointerRef.current = null
+    if (pointerId !== null && boardRef.current?.hasPointerCapture(pointerId)) {
+      boardRef.current.releasePointerCapture(pointerId)
+    }
+    updateTracePath([])
+  }
+
+  function tileIndexFromTarget(target: EventTarget | null) {
+    const element = target instanceof Element ? target : null
+    const tile = element?.closest<HTMLElement>('[data-board-index]')
+    if (!tile || !boardRef.current?.contains(tile)) return null
+    const index = Number(tile.dataset.boardIndex)
+    return Number.isInteger(index) ? index : null
+  }
+
+  function tileIndexAtPoint(clientX: number, clientY: number) {
+    return tileIndexFromTarget(document.elementFromPoint(clientX, clientY))
+  }
+
+  function handleBoardPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!active || !isPlayer || !event.isPrimary || event.button !== 0 || tracePointerRef.current !== null) return
+    const tileIndex = tileIndexFromTarget(event.target)
+    if (tileIndex === null) return
+
+    event.preventDefault()
+    clearTraceNotice()
+    tracePointerRef.current = event.pointerId
+    event.currentTarget.setPointerCapture(event.pointerId)
+    updateTracePath([tileIndex])
+  }
+
+  function handleBoardPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (tracePointerRef.current !== event.pointerId) return
+    event.preventDefault()
+    const tileIndex = tileIndexAtPoint(event.clientX, event.clientY)
+    if (tileIndex === null) return
+
+    const currentPath = tracePathRef.current
+    const nextPath = extendBoardTrace(currentPath, tileIndex, round.gridSize)
+    const unchanged = nextPath.length === currentPath.length
+      && nextPath.every((index, pathIndex) => index === currentPath[pathIndex])
+    if (!unchanged) updateTracePath(nextPath)
+  }
+
+  function handleBoardPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (tracePointerRef.current !== event.pointerId) return
+    event.preventDefault()
+    tracePointerRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    const result = submitBoardTrace(
+      round.grid,
+      tracePathRef.current,
+      MINIMUM_TRACE_LENGTH,
+      onAdd,
+    )
+    updateTracePath([])
+    if (result.status === 'too-short') showTraceNotice({ kind: 'short', word: result.word })
+    if (result.status === 'submitted') showTraceNotice({ kind: 'added', word: result.word })
+  }
+
+  function handleBoardPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    if (tracePointerRef.current !== event.pointerId) return
+    cancelBoardTrace()
+  }
+
   function openEntryMode() {
     if (!active || !isMobileEntryViewport()) return
     if (!entryFocused) {
@@ -282,26 +402,56 @@ export function OnlineWordEntry({
         </div>
       </div>
 
-      <div className="online-board-wrap">
-        <div className={`shared-board online-shared-board size-${round.gridSize}${active ? '' : ' is-covered'}`} aria-label={`${round.gridSize} by ${round.gridSize} rumbled letter-cube board`}>
-          {round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => (
-            <span key={`${rowIndex}-${columnIndex}`}>{cell}<small>{rowIndex * round.gridSize + columnIndex + 1}</small></span>
-          )))}
-        </div>
-        {!active && (
-          <div className={`board-state-cover ${countdown > 0 ? 'countdown' : ''}`} role="status">
-            {countdown > 0 ? (
-              <><span>{countdown}</span><strong>Cubes are rumbling</strong><small>The board opens together.</small></>
-            ) : paused ? (
-              <><Pause /><strong>Round paused</strong><small>The board and word entry are locked for everyone.</small></>
-            ) : (
-              <><LockKeyhole /><strong>Time’s up</strong><small>Your last saved list is being checked.</small></>
-            )}
+      <div className={`online-board-wrap${active && isPlayer ? ' can-trace' : ''}`}>
+        {active && isPlayer && (
+          <div className={`board-trace-readout${tracedWord ? ' is-tracing' : traceNotice ? ` is-${traceNotice.kind}` : ''}`} aria-live="polite">
+            <small>{tracedWord ? 'Tracing' : traceNotice?.kind === 'added' ? 'Added' : traceNotice?.kind === 'short' ? 'Try again' : 'Swipe to submit'}</small>
+            <strong>{tracedWord || (traceNotice?.kind === 'added' ? `${traceNotice.word} added` : traceNotice?.kind === 'short' ? '4 letters minimum' : 'Trace adjacent cubes')}</strong>
           </div>
         )}
+        <div className="online-board-stage">
+          <div
+            ref={boardRef}
+            className={`shared-board online-shared-board size-${round.gridSize}${active ? '' : ' is-covered'}${tracePath.length ? ' is-tracing' : ''}`}
+            aria-describedby="online-board-instructions"
+            aria-label={`${round.gridSize} by ${round.gridSize} rumbled letter-cube board. Swipe across adjacent cubes and release to submit a word.`}
+            onPointerDown={handleBoardPointerDown}
+            onPointerMove={handleBoardPointerMove}
+            onPointerUp={handleBoardPointerUp}
+            onPointerCancel={handleBoardPointerCancel}
+            onLostPointerCapture={handleBoardPointerCancel}
+          >
+            {round.grid.flatMap((row, rowIndex) => row.map((cell, columnIndex) => {
+              const tileIndex = rowIndex * round.gridSize + columnIndex
+              const traceOrder = tracePath.indexOf(tileIndex)
+              return (
+                <span
+                  key={`${rowIndex}-${columnIndex}`}
+                  className={traceOrder >= 0 ? 'is-traced' : undefined}
+                  data-board-index={tileIndex}
+                >
+                  {cell}
+                  {traceOrder >= 0 && <i className="board-trace-order" aria-hidden="true">{traceOrder + 1}</i>}
+                  <small>{tileIndex + 1}</small>
+                </span>
+              )
+            }))}
+          </div>
+          {!active && (
+            <div className={`board-state-cover ${countdown > 0 ? 'countdown' : ''}`} role="status">
+              {countdown > 0 ? (
+                <><span>{countdown}</span><strong>Cubes are rumbling</strong><small>The board opens together.</small></>
+              ) : paused ? (
+                <><Pause /><strong>Round paused</strong><small>The board and word entry are locked for everyone.</small></>
+              ) : (
+                <><LockKeyhole /><strong>Time’s up</strong><small>Your last saved list is being checked.</small></>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      <p className="round-instruction">Connect adjacent tiles horizontally, vertically, or diagonally. A tile cannot be reused in one word.</p>
+      <p className="round-instruction" id="online-board-instructions">Swipe adjacent cubes and release to submit, or type below. Connect horizontally, vertically, or diagonally; a cube cannot be reused.</p>
 
       {isPlayer ? (
         <div className="online-answer-desk">
