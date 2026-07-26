@@ -10,9 +10,39 @@ export type GameSummaryPlayer = {
   bestWords: string[]
 }
 
+export type RoundScorePlayer = {
+  memberId: string
+  displayName: string
+  pointsAdded: number
+}
+
 type ScoringPlay = {
   word: string
   points: number
+}
+
+export function buildRoundScoreSummary(room: RoomState, roundId: string): RoundScorePlayer[] {
+  const players = room.members.filter((member) => member.isPlayer && !member.removedAt)
+  const pointsByMember = new Map(players.map((player) => [player.id, 0]))
+  const wordsById = new Map(room.words.map((word) => [word.id, word]))
+  const submissionsById = new Map(room.submissions.map((submission) => [submission.id, submission]))
+
+  for (const result of room.results) {
+    if (result.roundId !== roundId || !result.eligible || result.score <= 0) continue
+    const word = wordsById.get(result.wordId)
+    const submission = word ? submissionsById.get(word.submissionId) : null
+    if (!submission || !pointsByMember.has(submission.memberId)) continue
+    pointsByMember.set(
+      submission.memberId,
+      (pointsByMember.get(submission.memberId) ?? 0) + result.score,
+    )
+  }
+
+  return players.map((player) => ({
+    memberId: player.id,
+    displayName: player.displayName,
+    pointsAdded: pointsByMember.get(player.id) ?? 0,
+  }))
 }
 
 export function buildGameSummary(room: RoomState): GameSummaryPlayer[] {
