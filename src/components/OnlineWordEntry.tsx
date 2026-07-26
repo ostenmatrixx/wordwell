@@ -7,6 +7,7 @@ import {
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { flushSync } from 'react-dom'
 import {
   Check,
   Clock3,
@@ -101,6 +102,8 @@ export function OnlineWordEntry({
   const [entryViewport, setEntryViewport] = useState<EntryViewport | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollPositionRef = useRef(0)
+  const restoreBodyRef = useRef<(() => void) | null>(null)
+  const addPointerHandledRef = useRef(false)
   const paused = Boolean(round.timerPausedAt)
   const ended = seconds <= 0 && countdown <= 0
   const active = countdown <= 0 && !paused && !ended
@@ -112,9 +115,8 @@ export function OnlineWordEntry({
     '--online-visual-width': `${entryViewport.width}px`,
   } as CSSProperties : undefined
 
-  useLayoutEffect(() => {
-    if (!entryFocused) return
-
+  function lockPageForEntry() {
+    if (restoreBodyRef.current) return
     const bodyStyle = document.body.style
     const previousBodyStyle = {
       left: bodyStyle.left,
@@ -133,7 +135,7 @@ export function OnlineWordEntry({
     bodyStyle.width = '100%'
     bodyStyle.overflow = 'hidden'
 
-    return () => {
+    restoreBodyRef.current = () => {
       bodyStyle.position = previousBodyStyle.position
       bodyStyle.top = previousBodyStyle.top
       bodyStyle.right = previousBodyStyle.right
@@ -142,6 +144,17 @@ export function OnlineWordEntry({
       bodyStyle.overflow = previousBodyStyle.overflow
       window.scrollTo({ top: scrollPosition, left: 0, behavior: 'instant' })
     }
+  }
+
+  function unlockPageForEntry() {
+    restoreBodyRef.current?.()
+    restoreBodyRef.current = null
+  }
+
+  useLayoutEffect(() => {
+    if (!entryFocused) return
+    lockPageForEntry()
+    return unlockPageForEntry
   }, [entryFocused])
 
   useEffect(() => {
@@ -190,7 +203,10 @@ export function OnlineWordEntry({
 
   function openEntryMode() {
     if (!active || !isMobileEntryViewport()) return
-    if (!entryFocused) scrollPositionRef.current = window.scrollY
+    if (!entryFocused) {
+      scrollPositionRef.current = window.scrollY
+      lockPageForEntry()
+    }
     setEntryViewport(readEntryViewport())
     setEntryFocused(true)
   }
@@ -199,9 +215,18 @@ export function OnlineWordEntry({
     if (!active || !isMobileEntryViewport() || event.button !== 0) return
 
     // Mobile browsers normally scroll a focused field into view before React
-    // can pin the play surface. Focus it ourselves without moving the page.
+    // can pin the play surface. Flush the fixed layout before asking iOS to
+    // open its keyboard so neither the page nor the input is moved afterward.
     event.preventDefault()
-    openEntryMode()
+    if (!entryFocused) {
+      scrollPositionRef.current = window.scrollY
+      const viewport = readEntryViewport()
+      lockPageForEntry()
+      flushSync(() => {
+        setEntryViewport(viewport)
+        setEntryFocused(true)
+      })
+    }
     inputRef.current?.focus({ preventScroll: true })
   }
 
@@ -211,15 +236,31 @@ export function OnlineWordEntry({
     }, 0)
   }
 
-  function submit(event: FormEvent) {
-    event.preventDefault()
+  function addDraftWord() {
     const normalized = draft.trim().toUpperCase().replace(/[^A-Z]/g, '')
-    if (!normalized || !active) return
+    if (!normalized || !active) return false
     onAdd(normalized)
     setDraft('')
     if (entryFocused) {
       window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
     }
+    return true
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    addDraftWord()
+  }
+
+  function handleAddPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!entryFocused || event.button !== 0) return
+
+    // Submitting on pointer-down keeps focus on the input. Letting the button
+    // take focus first makes iOS close the software keyboard between words.
+    event.preventDefault()
+    addPointerHandledRef.current = true
+    addDraftWord()
+    window.setTimeout(() => { addPointerHandledRef.current = false }, 0)
   }
 
   return (
@@ -230,7 +271,7 @@ export function OnlineWordEntry({
     >
       <div className="online-round-heading">
         <div>
-          <p className="section-kicker">Round {round.roundNumber} · Rumbled {round.gridSize ** 2}-cube board</p>
+          <p className="section-kicker">Round {round.roundNumber} · {round.gridSize ** 2} fixed letter cubes · one face rolled each</p>
           <h2 id="online-round-title">Find it. Type it. Keep moving.</h2>
           <p>Answers stay private until the timer ends and every list is checked together.</p>
         </div>
@@ -270,7 +311,7 @@ export function OnlineWordEntry({
           </div>
           <form className="quick-word-form" onSubmit={submit}>
             <label><span className="sr-only">Add a word</span><input ref={inputRef} value={draft} onPointerDown={handleEntryPointerDown} onFocus={openEntryMode} onBlur={closeEntryMode} onChange={(event) => setDraft(event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 80))} disabled={!active} placeholder={active ? 'TYPE A WORD' : countdown > 0 ? 'GET READY' : 'ENTRY LOCKED'} autoCapitalize="characters" autoComplete="off" enterKeyHint="enter" inputMode="text" spellCheck={false} /></label>
-            <button className="primary-button" type="submit" disabled={!active || !draft.trim()} onPointerDown={(event) => { if (entryFocused) event.preventDefault() }}><Plus size={18} /> Add</button>
+            <button className="primary-button" type="submit" disabled={!active || !draft.trim()} onPointerDown={handleAddPointerDown} onClick={(event) => { if (addPointerHandledRef.current) event.preventDefault() }}><Plus size={18} /> Add</button>
           </form>
           {words.length > 0 ? (
             <ol className="online-word-list">

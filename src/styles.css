@@ -1428,6 +1428,10 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
 .final-round-history article > strong { display: block; border-bottom: 1px solid var(--ink); background: var(--blue); padding: 9px 11px; font-size: 10px; }
 .final-round-history article li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid #e0d9ce; padding: 8px 10px; font-size: 8px; }
 .final-round-history article li:last-child { border-bottom: 0; }
+.final-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: var(--line); background: var(--lilac); padding: 25px; }
+.final-actions h3 { margin: 2px 0 4px; font: 780 28px 'Fraunces Variable', serif; }
+.final-actions p:last-child { max-width: 560px; margin: 0; color: #5f5866; font-size: 9px; line-height: 1.5; }
+.final-actions > div:last-child { display: flex; flex: 0 0 auto; gap: 10px; }
 
 .room-sidebar .scoreboard-card,
 .room-sidebar .plays-card,
@@ -1629,6 +1633,9 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
   .final-ranking > ol > li { grid-template-columns: 32px minmax(0, 1fr) auto; }
   .final-best { grid-column: 2 / -1; text-align: left; }
   .final-ranking > ol > li > b { grid-column: 3; grid-row: 1; }
+  .final-actions { align-items: stretch; flex-direction: column; padding: 21px 15px; }
+  .final-actions > div:last-child { flex-direction: column; }
+  .final-actions button { width: 100%; }
 }
 
 @media (max-width: 430px) {
@@ -1793,5 +1800,6 @@ select:focus-visible { outline: 3px solid #2e72d2; outline-offset: 2px; }
     min-width: 0;
     min-height: 47px;
     padding: 6px;
+    touch-action: manipulation;
   }
 }

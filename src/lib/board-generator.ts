@@ -9,8 +9,9 @@ function defineCube(faces: string): WordFactoryCube {
 }
 
 // Word Factory does not draw 25 unrelated random letters. Like the physical
-// shaker, it rumbles a fixed inventory of six-sided cubes. The 5×5 inventory
-// mirrors the classic English 25-cube set; 4×4 keeps the compact cube set.
+// shaker, it rumbles a fixed inventory of six-sided cubes. Word Factory is a
+// Philippine Big Boggle variant, so the 5×5 inventory uses the documented
+// official English Big Boggle cube set; 4×4 keeps the compact Boggle set.
 const WORD_FACTORY_CUBES_4 = [
   'AAEEGN', 'ABBJOO', 'ACHOPS', 'AFFKPS',
   'AOOTTW', 'CIMOTU', 'DEILRX', 'DELRVY',
@@ -20,10 +21,10 @@ const WORD_FACTORY_CUBES_4 = [
 
 const WORD_FACTORY_CUBES_5 = [
   'AAAFRS', 'AAEEEE', 'AAFIRS', 'ADENNN', 'AEEEEM',
-  'AEEGMU', 'AEGMNN', 'AFIRSY', 'BJKQXZ', 'CCENST',
-  'CEIILT', 'CEILPT', 'CEIPST', 'DDHNOT', 'DHHLOR',
-  'DHLNOR', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
-  'FIPRSY', 'GORRVW', 'IPRRRY', 'NOOTUW', 'OOOTTU',
+  'AEEGMU', 'AEGMNN', 'AFIRSY', 'BJKQXZ', 'CCNSTW',
+  'CEIILT', 'CEILPT', 'CEIPST', 'DDLNOR', 'DDHNOT',
+  'DHHLOR', 'DHLNOR', 'EIIITT', 'EMOTTT', 'ENSSSU',
+  'FIPRSY', 'GORRVW', 'HIPRRY', 'NOOTUW', 'OOOTTU',
 ].map(defineCube)
 
 function secureRandom() {
